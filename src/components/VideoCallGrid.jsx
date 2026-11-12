@@ -23,6 +23,8 @@ const ICE_SERVERS = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     {
       urls: [
         'turn:openrelay.metered.ca:80',
@@ -47,13 +49,15 @@ export default function VideoCallGrid({
   const [isInCall, setIsInCall] = useState(true);
   const [isMicOn, setIsMicOn] = useState(true);
   const [isCameraOn, setIsCameraOn] = useState(false);
+  const [facingMode, setFacingMode] = useState('user'); // 'user' (front) | 'environment' (back)
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [peers, setPeers] = useState({}); // { [peerId]: { stream, userName, avatarColor, isMuted, isCameraOff } }
   const [copied, setCopied] = useState(false);
+  const [, setLocalStreamTick] = useState(0);
 
   const localStreamRef = useRef(null);
-  const localVideoRef = useRef(null);
   const peerConnections = useRef({}); // { [peerId]: RTCPeerConnection }
+  const iceCandidatesQueue = useRef({}); // { [peerId]: RTCIceCandidateInit[] }
 
   const inviteUrl = typeof window !== 'undefined' ? `${window.location.origin}/?room=${room?.id || ''}` : '';
 
@@ -77,28 +81,36 @@ export default function VideoCallGrid({
     copyInviteLink();
   };
 
-  // Attach local media tracks to all existing peer connections
+  // Helper to replace or add tracks on all active peer connections
   const attachLocalStreamToPeers = useCallback((stream) => {
     if (!stream) return;
     const tracks = stream.getTracks();
+
     Object.values(peerConnections.current).forEach(pc => {
       tracks.forEach(track => {
-        const senders = pc.getSenders();
-        const existingSender = senders.find(s => s.track && s.track.kind === track.kind);
-        if (existingSender) {
-          existingSender.replaceTrack(track).catch(() => {});
+        // Find existing transceiver of the same kind
+        const transceiver = pc.getTransceivers().find(t => 
+          t.receiver.track.kind === track.kind || 
+          (t.sender.track && t.sender.track.kind === track.kind)
+        );
+
+        if (transceiver && transceiver.sender) {
+          transceiver.direction = 'sendrecv';
+          transceiver.sender.replaceTrack(track).catch(err => {
+            console.debug('[WebRTC] replaceTrack warning:', err);
+          });
         } else {
           try {
             pc.addTrack(track, stream);
           } catch (e) {
-            console.warn('Could not add track to peer:', e);
+            console.warn('[WebRTC] Could not add track to peer:', e);
           }
         }
       });
     });
   }, []);
 
-  // Safe microphone acquisition with mobile fallbacks (No native alert popups!)
+  // Safe microphone acquisition with mobile fallbacks
   const startVoice = useCallback(async () => {
     if (localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
@@ -131,10 +143,17 @@ export default function VideoCallGrid({
     }
 
     if (stream) {
-      localStreamRef.current = stream;
+      const newAudioTrack = stream.getAudioTracks()[0];
+      if (localStreamRef.current) {
+        if (newAudioTrack) localStreamRef.current.addTrack(newAudioTrack);
+      } else {
+        localStreamRef.current = stream;
+      }
+
       setIsInCall(true);
       setIsMicOn(true);
-      attachLocalStreamToPeers(stream);
+      setLocalStreamTick(t => t + 1);
+      attachLocalStreamToPeers(localStreamRef.current);
 
       socket.emit('webrtc:media-state', {
         isMuted: false,
@@ -145,8 +164,101 @@ export default function VideoCallGrid({
       // Announce ready to room peers
       socket.emit('webrtc:join-call');
     }
-    return stream;
+    return localStreamRef.current;
   }, [attachLocalStreamToPeers, isCameraOn]);
+
+  // Robust Camera Acquisition with progressive constraints fallback
+  const startCameraWithFacing = async (targetFacing) => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.warn('getUserMedia video not supported in this environment');
+      return false;
+    }
+
+    // Stop existing video track if active
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach(t => {
+        t.stop();
+        localStreamRef.current.removeTrack(t);
+      });
+    }
+
+    const constraintsOptions = [
+      { video: { facingMode: { ideal: targetFacing }, width: { ideal: 640 }, height: { ideal: 360 } }, audio: false },
+      { video: { facingMode: targetFacing }, audio: false },
+      { video: true, audio: false }
+    ];
+
+    let videoStream = null;
+    for (const constraints of constraintsOptions) {
+      try {
+        videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (videoStream) break;
+      } catch (err) {
+        console.debug('[WebRTC] Camera constraint fallback:', constraints, err);
+      }
+    }
+
+    if (!videoStream) {
+      console.warn('[WebRTC] Unable to open camera on any supported constraints');
+      setIsCameraOn(false);
+      return false;
+    }
+
+    const newVideoTrack = videoStream.getVideoTracks()[0];
+    if (!newVideoTrack) {
+      setIsCameraOn(false);
+      return false;
+    }
+
+    if (localStreamRef.current) {
+      localStreamRef.current.addTrack(newVideoTrack);
+    } else {
+      localStreamRef.current = videoStream;
+    }
+
+    setIsCameraOn(true);
+    setLocalStreamTick(t => t + 1);
+
+    // Update all peer connections with the active video track
+    Object.values(peerConnections.current).forEach(pc => {
+      const videoTransceiver = pc.getTransceivers().find(t => 
+        t.receiver.track.kind === 'video' || 
+        (t.sender.track && t.sender.track.kind === 'video')
+      );
+
+      if (videoTransceiver && videoTransceiver.sender) {
+        videoTransceiver.direction = 'sendrecv';
+        videoTransceiver.sender.replaceTrack(newVideoTrack).catch(err => {
+          console.warn('[WebRTC] replaceTrack error for video:', err);
+        });
+      } else {
+        try {
+          pc.addTrack(newVideoTrack, localStreamRef.current);
+        } catch (e) {
+          console.warn('[WebRTC] addTrack error for video:', e);
+        }
+      }
+    });
+
+    socket.emit('webrtc:media-state', {
+      isMuted: !isMicOn,
+      isCameraOff: false,
+      isScreenSharing
+    });
+
+    return true;
+  };
+
+  // Flip Camera between front & back on mobile
+  const flipCamera = async () => {
+    if (!isCameraOn) {
+      await toggleCamera();
+      return;
+    }
+    const nextFacing = facingMode === 'user' ? 'environment' : 'user';
+    setFacingMode(nextFacing);
+    await startCameraWithFacing(nextFacing);
+  };
 
   // Auto-join voice call immediately when entering the room
   useEffect(() => {
@@ -166,12 +278,23 @@ export default function VideoCallGrid({
     };
   }, [startVoice]);
 
-  // Update local video element when local stream changes
+  // Mobile browser autoplay policy unlocker
   useEffect(() => {
-    if (localVideoRef.current && localStreamRef.current) {
-      localVideoRef.current.srcObject = localStreamRef.current;
-    }
-  }, [isCameraOn, isScreenSharing, isInCall]);
+    const unlockAudio = () => {
+      document.querySelectorAll('audio').forEach(audio => {
+        if (audio.paused && audio.srcObject) {
+          audio.play().catch(() => {});
+        }
+      });
+    };
+
+    window.addEventListener('click', unlockAudio, { passive: true });
+    window.addEventListener('touchstart', unlockAudio, { passive: true });
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
 
   // Create Peer Connection for a specific remote peer
   const createPeerConnection = useCallback((peerId, peerName, peerColor, isInitiator = false) => {
@@ -181,31 +304,39 @@ export default function VideoCallGrid({
 
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnections.current[peerId] = pc;
+    iceCandidatesQueue.current[peerId] = [];
 
-    // Upfront audio & video transceivers prevent renegotiation race conditions
+    // Pre-allocate audio & video transceivers to prevent negotiation race conditions
+    let audioTransceiver = null;
+    let videoTransceiver = null;
     try {
-      pc.addTransceiver('audio', { direction: 'sendrecv' });
-      pc.addTransceiver('video', { direction: 'sendrecv' });
+      audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
     } catch (e) {
-      console.debug('Transceivers fallback:', e);
+      console.debug('[WebRTC] Transceivers fallback:', e);
     }
 
-    // Add local tracks to peer connection if available
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
-        const senders = pc.getSenders();
-        const existing = senders.find(s => s.track && s.track.kind === track.kind);
-        if (existing) {
-          existing.replaceTrack(track).catch(() => {});
-        } else {
-          try {
-            pc.addTrack(track, localStreamRef.current);
-          } catch (e) {}
-        }
-      });
+    // Attach local audio track if ready
+    const localAudioTrack = localStreamRef.current?.getAudioTracks()[0];
+    if (localAudioTrack) {
+      if (audioTransceiver?.sender) {
+        audioTransceiver.sender.replaceTrack(localAudioTrack).catch(() => {});
+      } else {
+        try { pc.addTrack(localAudioTrack, localStreamRef.current); } catch (e) {}
+      }
     }
 
-    // Handle ICE candidate generation
+    // Attach local video track if camera is on
+    const localVideoTrack = localStreamRef.current?.getVideoTracks()[0];
+    if (localVideoTrack && isCameraOn) {
+      if (videoTransceiver?.sender) {
+        videoTransceiver.sender.replaceTrack(localVideoTrack).catch(() => {});
+      } else {
+        try { pc.addTrack(localVideoTrack, localStreamRef.current); } catch (e) {}
+      }
+    }
+
+    // ICE Candidate generation
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         socket.emit('webrtc:signal', {
@@ -216,7 +347,16 @@ export default function VideoCallGrid({
       }
     };
 
-    // Handle incoming remote track (ensure audio & video tracks are merged into single stream)
+    // Auto-restart ICE if connection fails
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') {
+        try {
+          pc.restartIce();
+        } catch (e) {}
+      }
+    };
+
+    // Handle incoming remote tracks (ensure audio & video tracks are merged into single stream)
     pc.ontrack = (event) => {
       setPeers(prev => {
         let stream = prev[peerId]?.stream;
@@ -230,7 +370,7 @@ export default function VideoCallGrid({
           ...prev,
           [peerId]: {
             ...prev[peerId],
-            stream,
+            stream: new MediaStream(stream.getTracks()),
             userName: peerName || prev[peerId]?.userName || 'Member',
             avatarColor: peerColor || prev[peerId]?.avatarColor || '#5865f2'
           }
@@ -238,7 +378,23 @@ export default function VideoCallGrid({
       });
     };
 
-    // If initiator, create and send offer
+    // Negotiation Needed Handler
+    pc.onnegotiationneeded = async () => {
+      try {
+        if (pc.signalingState !== 'stable') return;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('webrtc:signal', {
+          to: peerId,
+          signal: pc.localDescription,
+          type: 'offer'
+        });
+      } catch (err) {
+        console.debug('[WebRTC] onnegotiationneeded handled:', err);
+      }
+    };
+
+    // If initiator, create and send initial offer
     if (isInitiator) {
       pc.createOffer()
         .then(offer => pc.setLocalDescription(offer))
@@ -249,13 +405,13 @@ export default function VideoCallGrid({
             type: 'offer'
           });
         })
-        .catch(err => console.error('Error creating offer:', err));
+        .catch(err => console.error('[WebRTC] Error creating offer:', err));
     }
 
     return pc;
-  }, []);
+  }, [isCameraOn]);
 
-  // Socket signaling listeners with deterministic polite peer negotiation
+  // Socket signaling listeners with deterministic polite peer negotiation & candidate queueing
   useEffect(() => {
     if (!isInCall) return;
 
@@ -297,14 +453,24 @@ export default function VideoCallGrid({
               pc.setRemoteDescription(new RTCSessionDescription(signal))
             ]);
           } catch (e) {
-            console.warn('Rollback error:', e);
+            console.warn('[WebRTC] Rollback error:', e);
           }
         } else {
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(signal));
           } catch (e) {
-            console.warn('Error setting remote description:', e);
+            console.warn('[WebRTC] Error setting remote description:', e);
           }
+        }
+
+        // Flush any queued ICE candidates
+        if (iceCandidatesQueue.current[from]?.length > 0) {
+          for (const cand of iceCandidatesQueue.current[from]) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(cand));
+            } catch (e) {}
+          }
+          iceCandidatesQueue.current[from] = [];
         }
 
         try {
@@ -317,18 +483,36 @@ export default function VideoCallGrid({
             type: 'answer'
           });
         } catch (e) {
-          console.warn('Error creating/setting answer:', e);
+          console.warn('[WebRTC] Error creating/setting answer:', e);
         }
       } else if (type === 'answer') {
         if (pc) {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal)).catch(e => console.warn('Answer set error:', e));
+          await pc.setRemoteDescription(new RTCSessionDescription(signal)).catch(e => console.warn('[WebRTC] Answer set error:', e));
+
+          // Flush any queued ICE candidates
+          if (iceCandidatesQueue.current[from]?.length > 0) {
+            for (const cand of iceCandidatesQueue.current[from]) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand));
+              } catch (e) {}
+            }
+            iceCandidatesQueue.current[from] = [];
+          }
         }
       } else if (type === 'candidate') {
         if (pc && signal) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(signal));
-          } catch (e) {
-            console.warn('Error adding ICE candidate:', e);
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(signal));
+            } catch (e) {
+              console.warn('[WebRTC] Error adding ICE candidate:', e);
+            }
+          } else {
+            // Buffer candidate until remote description is ready
+            if (!iceCandidatesQueue.current[from]) {
+              iceCandidatesQueue.current[from] = [];
+            }
+            iceCandidatesQueue.current[from].push(signal);
           }
         }
       }
@@ -355,6 +539,7 @@ export default function VideoCallGrid({
         peerConnections.current[peerId].close();
         delete peerConnections.current[peerId];
       }
+      delete iceCandidatesQueue.current[peerId];
       setPeers(prev => {
         const next = { ...prev };
         delete next[peerId];
@@ -389,6 +574,7 @@ export default function VideoCallGrid({
 
     Object.values(peerConnections.current).forEach(pc => pc.close());
     peerConnections.current = {};
+    iceCandidatesQueue.current = {};
 
     setIsInCall(false);
     setIsMicOn(false);
@@ -424,16 +610,24 @@ export default function VideoCallGrid({
   // Toggle Camera
   const toggleCamera = async () => {
     if (isCameraOn) {
-      const videoTrack = localStreamRef.current?.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.stop();
-        localStreamRef.current.removeTrack(videoTrack);
+      // Turn camera OFF cleanly while preserving transceiver in SDP
+      if (localStreamRef.current) {
+        localStreamRef.current.getVideoTracks().forEach(t => {
+          t.stop();
+          localStreamRef.current.removeTrack(t);
+        });
       }
       setIsCameraOn(false);
+      setLocalStreamTick(t => t + 1);
 
       Object.values(peerConnections.current).forEach(pc => {
-        const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-        if (sender) pc.removeTrack(sender);
+        const videoTransceiver = pc.getTransceivers().find(t => 
+          t.receiver.track.kind === 'video' || 
+          (t.sender.track && t.sender.track.kind === 'video')
+        );
+        if (videoTransceiver && videoTransceiver.sender) {
+          videoTransceiver.sender.replaceTrack(null).catch(() => {});
+        }
       });
 
       socket.emit('webrtc:media-state', {
@@ -442,84 +636,52 @@ export default function VideoCallGrid({
         isScreenSharing
       });
     } else {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-
-      let videoStream = null;
-      try {
-        videoStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 360 } }
-        });
-      } catch (e1) {
-        try {
-          videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        } catch (e2) {
-          console.warn('Camera permission denied:', e2);
-          return;
-        }
-      }
-
-      if (videoStream) {
-        const newVideoTrack = videoStream.getVideoTracks()[0];
-
-        if (localStreamRef.current) {
-          localStreamRef.current.addTrack(newVideoTrack);
-        } else {
-          localStreamRef.current = videoStream;
-        }
-
-        setIsCameraOn(true);
-
-        Object.values(peerConnections.current).forEach(pc => {
-          const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-          if (sender) {
-            sender.replaceTrack(newVideoTrack).catch(() => {});
-          } else {
-            try {
-              pc.addTrack(newVideoTrack, localStreamRef.current);
-            } catch (e) {}
-          }
-        });
-
-        socket.emit('webrtc:media-state', {
-          isMuted: !isMicOn,
-          isCameraOff: false,
-          isScreenSharing
-        });
-      }
+      // Turn camera ON
+      await startCameraWithFacing(facingMode);
     }
   };
 
-  // Toggle Screen Share
+  // Toggle Screen Share (Desktop)
   const toggleScreenShare = async () => {
     if (isScreenSharing) {
       const screenTrack = localStreamRef.current?.getVideoTracks()[0];
       if (screenTrack) screenTrack.stop();
       setIsScreenSharing(false);
       setIsCameraOn(false);
+      setLocalStreamTick(t => t + 1);
     } else {
       try {
         const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
         const screenTrack = displayStream.getVideoTracks()[0];
 
         Object.values(peerConnections.current).forEach(pc => {
-          const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-          if (sender) {
-            sender.replaceTrack(screenTrack);
+          const videoTransceiver = pc.getTransceivers().find(t => 
+            t.receiver.track.kind === 'video' || 
+            (t.sender.track && t.sender.track.kind === 'video')
+          );
+          if (videoTransceiver && videoTransceiver.sender) {
+            videoTransceiver.sender.replaceTrack(screenTrack).catch(() => {});
           } else {
-            pc.addTrack(screenTrack, displayStream);
+            try { pc.addTrack(screenTrack, displayStream); } catch (e) {}
           }
         });
 
         screenTrack.onended = () => {
           setIsScreenSharing(false);
+          setLocalStreamTick(t => t + 1);
         };
 
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = displayStream;
+        if (localStreamRef.current) {
+          const oldVideo = localStreamRef.current.getVideoTracks()[0];
+          if (oldVideo) localStreamRef.current.removeTrack(oldVideo);
+          localStreamRef.current.addTrack(screenTrack);
+        } else {
+          localStreamRef.current = displayStream;
         }
 
         setIsScreenSharing(true);
         setIsCameraOn(true);
+        setLocalStreamTick(t => t + 1);
       } catch (err) {
         console.warn('Screen share canceled:', err);
       }
@@ -554,79 +716,75 @@ export default function VideoCallGrid({
       
       {/* Permanent rendered audio elements for remote peers (offscreen so mobile browsers never suspend playback) */}
       <div className="fixed -top-96 -left-96 w-1 h-1 opacity-0 pointer-events-none" aria-hidden="true">
-        {Object.entries(peers).map(([peerId, peerData]) => (
-          <audio
-            key={`audio-${peerId}`}
-            ref={(el) => {
-              if (el && peerData.stream) {
-                if (el.srcObject !== peerData.stream) {
-                  el.srcObject = peerData.stream;
-                }
-                el.play().catch(err => {
-                  console.debug('Autoplay deferred:', err);
-                });
-              }
-            }}
-            autoPlay
-            playsInline
-          />
-        ))}
+        {Object.entries(peers).map(([peerId, peerData]) => {
+          if (!peerData.stream) return null;
+          return (
+            <RemoteAudioPlayer
+              key={`audio-${peerId}`}
+              stream={peerData.stream}
+              isMuted={peerData.isMuted}
+            />
+          );
+        })}
       </div>
 
-      {/* 1. GOOGLE MEET TOP HEADER BAR */}
-      <div className="h-14 px-4 bg-[#121212] flex items-center justify-between flex-shrink-0 z-30 select-none">
-        <button 
-          onClick={onLeaveRoom}
-          className="w-10 h-10 rounded-full bg-[#202124] hover:bg-[#3c4043] text-white flex items-center justify-center transition-all active:scale-95 shadow-sm"
-          title="Exit meeting"
+      {/* 1. GOOGLE MEET TOP BAR */}
+      <div className="h-14 px-4 flex items-center justify-between z-30 flex-shrink-0 bg-[#121212]">
+        {/* Back / Leave circle button */}
+        <button
+          onClick={onLeaveRoom || leaveCall}
+          className="w-10 h-10 rounded-full flex items-center justify-center text-[#e8eaed] hover:bg-[#3c4043]/60 active:scale-95 transition-all"
+          title="Back to Lounge"
+          aria-label="Back to Lounge"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
 
-        {/* Center Pill: "You're the only one here" or Room Title */}
-        <div className="px-4 py-1.5 rounded-full bg-[#202124] border border-[#3c4043]/50 text-[#e8eaed] text-xs font-semibold flex items-center gap-2 shadow-sm">
-          <span className={`w-2 h-2 rounded-full ${isMicOn ? 'bg-[#34a853] animate-pulse' : 'bg-[#ea4335]'}`} />
-          <span className="truncate max-w-[200px]">
-            {isAlone ? "You're the only one here" : `${room?.name || 'Meeting'} (${totalCallCount})`}
-          </span>
+        {/* Center Room Pill */}
+        <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#202124] border border-[#3c4043]/50 text-xs font-medium text-[#e8eaed] shadow-sm max-w-[200px] sm:max-w-xs truncate">
+          <span className="w-2 h-2 rounded-full bg-[#34a853] animate-pulse flex-shrink-0" />
+          <span className="truncate">{isAlone ? "You're the only one here" : (room?.name || 'Meeting')}</span>
         </div>
 
-        {/* View Switcher: Theater View vs Meet Grid View */}
-        <button 
+        {/* Right audio indicator / View switcher */}
+        <button
           onClick={onToggleLayoutMode}
-          className="w-10 h-10 rounded-full bg-[#202124] hover:bg-[#3c4043] text-white flex items-center justify-center transition-all active:scale-95 shadow-sm"
-          title={layoutMode === 'grid' ? "Switch to Theater Stage" : "Switch to Google Meet Grid"}
+          className="w-10 h-10 rounded-full flex items-center justify-center text-[#e8eaed] hover:bg-[#3c4043]/60 active:scale-95 transition-all"
+          title={layoutMode === 'grid' ? "Theater Stage" : "Meet Grid"}
+          aria-label="Toggle Layout"
         >
-          {layoutMode === 'grid' ? <Tv className="w-5 h-5 text-[#8ab4f8]" /> : <LayoutGrid className="w-5 h-5 text-white" />}
+          {layoutMode === 'grid' ? <Tv className="w-5 h-5 text-[#8ab4f8]" /> : <LayoutGrid className="w-5 h-5 text-[#e8eaed]" />}
         </button>
       </div>
 
-      {/* 2. MAIN BODY (GOOGLE MEET UI) */}
-      <div className="flex-1 min-h-0 relative flex flex-col overflow-hidden">
-        
-        {/* CASE A: ALONE IN ROOM -> EXACT GOOGLE MEET EMPTY STATE */}
+      {/* 2. MAIN CALL STAGE */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+
         {isAlone ? (
-          <div className="flex-1 min-h-0 relative flex flex-col justify-center px-6 sm:px-12 bg-[#121212] overflow-hidden">
+          /* CASE A: USER IS ALONE IN ROOM -> GOOGLE MEET WAITING SCREEN */
+          <div className="flex-1 flex flex-col justify-center px-6 sm:px-12 max-w-lg mx-auto w-full relative z-10 pb-28">
             
-            {/* Google Meet Share Invite Card */}
-            <div className="max-w-md w-full animate-fade-in z-10 pb-16">
-              <h2 className="text-2xl sm:text-3xl font-medium text-white mb-2 tracking-tight">
-                You're the only one here
-              </h2>
-              <p className="text-xs sm:text-sm text-[#9aa0a6] mb-5 leading-relaxed max-w-sm">
-                Share this meeting link with others you want in the meeting
-              </p>
+            <h1 className="text-2xl sm:text-3xl font-semibold text-[#e8eaed] tracking-tight mb-2">
+              You're the only one here
+            </h1>
+            <p className="text-xs sm:text-sm text-[#9aa0a6] mb-6">
+              Share this meeting link with others you want in the meeting
+            </p>
 
-              {/* Meeting Link Pill Box with Copy Action */}
-              <div 
+            {/* Google Meet Invite Link Box */}
+            <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-[#202124] border border-[#3c4043] text-xs sm:text-sm text-[#e8eaed] mb-4 shadow-lg">
+              <span className="truncate pr-3 font-mono text-[#8ab4f8]">{inviteUrl || 'afterspot.vercel.app'}</span>
+              <button
                 onClick={copyInviteLink}
-                className="flex items-center justify-between px-4 py-3 rounded-xl bg-[#202124] border border-[#3c4043] text-[#e8eaed] text-xs sm:text-sm font-mono cursor-pointer hover:border-[#5f6368] active:scale-98 transition-all mb-4 shadow-md group"
+                className="p-1.5 rounded-lg hover:bg-[#3c4043] text-[#9aa0a6] hover:text-white transition-colors flex-shrink-0"
+                title="Copy Link"
               >
-                <span className="truncate mr-2 text-[#8ab4f8]">{inviteUrl}</span>
-                {copied ? <Check className="w-5 h-5 text-[#34a853] flex-shrink-0" /> : <Copy className="w-5 h-5 text-[#9aa0a6] group-hover:text-white flex-shrink-0" />}
-              </div>
+                {copied ? <Check className="w-4 h-4 text-[#34a853]" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
 
-              {/* Google Meet Coral Pill Share Button */}
+            {/* Coral Share Invite Pill */}
+            <div>
               <button 
                 onClick={shareInviteLink}
                 className="flex items-center gap-2.5 px-6 py-3 rounded-full bg-[#f28b82] hover:bg-[#f6aea9] text-[#202124] font-bold text-xs sm:text-sm shadow-xl active:scale-95 transition-all"
@@ -636,15 +794,12 @@ export default function VideoCallGrid({
               </button>
             </div>
 
-            {/* Floating Self Video PIP Tile (bottom-right, exactly like Google Meet!) */}
+            {/* Floating Self Video PIP Tile (Google Meet PIP Tile) */}
             <div className="absolute bottom-24 sm:bottom-28 right-4 sm:right-8 w-32 h-44 sm:w-44 sm:h-56 rounded-2xl overflow-hidden shadow-2xl border-2 border-[#3c4043] bg-[#202124] flex items-center justify-center z-20">
               {isCameraOn || isScreenSharing ? (
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
+                <LocalVideoView 
+                  stream={localStreamRef.current} 
+                  isScreenSharing={isScreenSharing} 
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center text-center p-3 select-none">
@@ -662,9 +817,9 @@ export default function VideoCallGrid({
 
               {/* Camera Flip Button */}
               <button 
-                onClick={toggleCamera} 
+                onClick={flipCamera} 
                 className="absolute bottom-2 right-2 w-7 h-7 rounded-full bg-black/60 backdrop-blur-md text-white flex items-center justify-center hover:bg-black/80 shadow transition-transform active:scale-90"
-                title="Toggle / Flip Camera"
+                title={isCameraOn ? "Flip Camera" : "Turn On Camera"}
               >
                 <SwitchCamera className="w-3.5 h-3.5" />
               </button>
@@ -699,15 +854,12 @@ export default function VideoCallGrid({
               </div>
 
               <div className="flex-1 p-2 grid grid-cols-2 lg:grid-cols-1 gap-2 overflow-y-auto no-scrollbar">
-                {/* User Tile */}
+                {/* User's Own Tile */}
                 <div className="relative rounded-xl overflow-hidden bg-[#202124] border border-[#3c4043] flex items-center justify-center shadow-md aspect-video min-h-[120px]">
                   {isCameraOn || isScreenSharing ? (
-                    <video
-                      ref={localVideoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
+                    <LocalVideoView 
+                      stream={localStreamRef.current} 
+                      isScreenSharing={isScreenSharing} 
                     />
                   ) : (
                     <div className="flex flex-col items-center justify-center text-center p-2 select-none">
@@ -826,17 +978,46 @@ export default function VideoCallGrid({
   );
 }
 
+// Dedicated Local Video View ensuring proper autoPlay & playsInline
+function LocalVideoView({ stream, isScreenSharing }) {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !stream) return;
+    el.srcObject = stream;
+    el.play().catch(e => console.debug('[WebRTC] Local video play error:', e));
+  }, [stream]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted
+      className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
+    />
+  );
+}
+
 // Individual Remote Video Tile Component
 function RemotePeerTile({ peerId, peerData, layoutMode }) {
   const videoRef = useRef(null);
 
-  useEffect(() => {
-    if (videoRef.current && peerData.stream) {
-      videoRef.current.srcObject = peerData.stream;
-    }
-  }, [peerData.stream]);
+  const hasVideoTrack = Boolean(
+    peerData.stream && 
+    peerData.stream.getVideoTracks().length > 0 && 
+    peerData.stream.getVideoTracks().some(t => t.readyState === 'live') &&
+    !peerData.isCameraOff
+  );
 
-  const hasVideoTrack = peerData.stream && peerData.stream.getVideoTracks().length > 0 && !peerData.isCameraOff;
+  useEffect(() => {
+    const el = videoRef.current;
+    if (el && peerData.stream && hasVideoTrack) {
+      el.srcObject = peerData.stream;
+      el.play().catch(e => console.debug('[WebRTC] Remote video play error:', e));
+    }
+  }, [peerData.stream, hasVideoTrack]);
 
   return (
     <div 
@@ -878,5 +1059,50 @@ function RemotePeerTile({ peerId, peerData, layoutMode }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Dedicated Remote Audio Player Component
+function RemoteAudioPlayer({ stream, isMuted }) {
+  const audioRef = useRef(null);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !stream) return;
+
+    el.srcObject = stream;
+    el.muted = Boolean(isMuted);
+
+    const tryPlay = () => {
+      const p = el.play();
+      if (p !== undefined) {
+        p.catch(err => {
+          console.debug('[WebRTC] Remote audio autoplay deferred:', err?.name);
+        });
+      }
+    };
+
+    tryPlay();
+
+    const handleTrackEvent = () => {
+      el.srcObject = stream;
+      tryPlay();
+    };
+
+    stream.addEventListener('addtrack', handleTrackEvent);
+    stream.addEventListener('removetrack', handleTrackEvent);
+
+    return () => {
+      stream.removeEventListener('addtrack', handleTrackEvent);
+      stream.removeEventListener('removetrack', handleTrackEvent);
+    };
+  }, [stream, isMuted]);
+
+  return (
+    <audio
+      ref={audioRef}
+      autoPlay
+      playsInline
+    />
   );
 }

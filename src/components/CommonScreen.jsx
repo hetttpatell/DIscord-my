@@ -1189,30 +1189,15 @@ export default function CommonScreen({
                     showVideo={true}
                   />
 
-                  {/* Interactive Theater Click-to-Play/Pause Overlay */}
-                  <div 
-                    onClick={handlePlayPause}
-                    className="absolute inset-0 z-20 cursor-pointer flex items-center justify-center group select-none"
-                    title={isPlaying ? "Click to Pause for Everyone" : "Click to Play for Everyone"}
-                  >
+                  {/* Theater Screen Status Overlay (Display only, non-interactive) */}
+                  <div className="absolute inset-0 z-20 pointer-events-none select-none">
                     {/* Synchronized Theater Status Badge when Paused */}
                     {!isPlaying && (
-                      <div className="absolute top-3 left-3 bg-black/75 backdrop-blur-md px-3 py-1 rounded-full border border-white/15 flex items-center gap-1.5 text-xs font-bold text-white shadow-xl pointer-events-none animate-fade-in">
+                      <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-md px-3 py-1 rounded-full border border-white/15 flex items-center gap-1.5 text-xs font-bold text-white shadow-xl animate-fade-in">
                         <Pause className="w-3 h-3 text-[#f0b232] fill-current" />
                         <span>Theater Paused</span>
                       </div>
                     )}
-
-                    {/* Central Play/Pause Watermark Icon */}
-                    <div className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 backdrop-blur-md border border-white/20 flex items-center justify-center text-white shadow-2xl transition-all duration-200 pointer-events-none ${
-                      !isPlaying ? 'scale-100 opacity-100 ring-4 ring-white/10' : 'scale-90 opacity-0 group-hover:opacity-80 group-hover:scale-100'
-                    }`}>
-                      {!isPlaying ? (
-                        <Play className="w-6 h-6 sm:w-7 sm:h-7 fill-white translate-x-0.5" />
-                      ) : (
-                        <Pause className="w-6 h-6 sm:w-7 sm:h-7 fill-white" />
-                      )}
-                    </div>
                   </div>
                 </>
               ) : (

@@ -70,20 +70,33 @@ export default function YouTubePlayer({
       videoId: currentTrack?.id || '',
       playerVars: {
         autoplay: 1,
-        controls: 0, // We supply custom collaborative controls
+        controls: 0, // Custom collaborative controls only
         disablekb: 1,
         enablejsapi: 1,
         fs: 0,
         modestbranding: 1,
         rel: 0,
         origin: window.location.origin,
-        playsinline: 1 // Important for mobile
+        playsinline: 1, // Important for mobile
+        iv_load_policy: 3, // Disable video annotations
+        autohide: 1
       },
       events: {
         onReady: (event) => {
           setIsReady(true);
           event.target.setVolume(volume);
           if (isMuted) event.target.mute();
+
+          // Disable pointer events on the iframe so users cannot interact with YT directly
+          try {
+            const iframe = event.target.getIframe();
+            if (iframe) {
+              iframe.style.pointerEvents = 'none';
+              iframe.setAttribute('tabindex', '-1');
+            }
+          } catch (e) {
+            console.debug('Iframe style setup:', e);
+          }
 
           // Sync initial state
           if (currentTrack?.id) {
@@ -104,13 +117,14 @@ export default function YouTubePlayer({
   };
 
   // Handle YouTube player state changes
-  // When user interacts with the YouTube player directly, broadcast to the room!
+  // YouTube is purely an output display: user cannot play/pause YT directly.
+  // Playback is strictly governed by our app's play/pause button.
   const handlePlayerStateChange = useCallback((event) => {
     if (!isReady) return;
 
     const playerState = event.data;
 
-    // Detect autoplay blocked (browser policy)
+    // Detect autoplay unblocked
     if (playerState === window.YT.PlayerState.PLAYING) {
       setAutoplayBlocked(false);
     }
@@ -124,28 +138,14 @@ export default function YouTubePlayer({
     // If change was triggered programmatically by socket sync, ignore it
     if (isInternalUpdate.current) return;
 
-    const player = event.target;
-    const currentPos = player.getCurrentTime ? player.getCurrentTime() : 0;
-
-    // User physically clicked pause inside the player -> Sync pause to all room members
-    if (playerState === window.YT.PlayerState.PAUSED) {
-      lastSyncRef.current.isPlaying = false;
-      isInternalUpdate.current = true;
-      socket.emit('player:pause', { currentTime: currentPos });
-      setTimeout(() => {
-        isInternalUpdate.current = false;
-      }, 500);
-    } 
-    // User physically clicked play inside the player -> Sync play to all room members
-    else if (playerState === window.YT.PlayerState.PLAYING) {
-      lastSyncRef.current.isPlaying = true;
-      isInternalUpdate.current = true;
-      socket.emit('player:play', { currentTime: currentPos });
-      setTimeout(() => {
-        isInternalUpdate.current = false;
-      }, 500);
+    // Guard against unwanted pause if room is in playing state
+    if (playerState === window.YT.PlayerState.PAUSED && isPlaying) {
+      const player = event.target;
+      if (player && typeof player.playVideo === 'function') {
+        player.playVideo();
+      }
     }
-  }, [isReady]);
+  }, [isReady, isPlaying]);
 
   // Synchronize player with room state (called when props change from server socket)
   const syncPlayerState = useCallback((targetPlaying, targetPosition) => {
@@ -308,10 +308,33 @@ export default function YouTubePlayer({
         </div>
       )}
 
+      {/* Absolute Transparent Shield: Blocks all clicks, touches, context menus from reaching YouTube */}
+      <div 
+        className="absolute inset-0 z-10 bg-transparent select-none"
+        style={{ pointerEvents: 'auto', touchAction: 'none' }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onTouchStart={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      />
+
       {/* Embedded IFrame container */}
       <div 
         ref={containerRef} 
-        className="w-full h-full pointer-events-none"
+        className="w-full h-full pointer-events-none select-none"
+        style={{ pointerEvents: 'none' }}
       />
     </div>
   );

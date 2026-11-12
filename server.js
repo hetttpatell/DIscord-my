@@ -301,6 +301,42 @@ io.on('connection', (socket) => {
 
     const userSessionId = sessionId || `sess-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
+    // Check if this session already exists as a member (reconnecting user)
+    const existingMember = room.members.find(m => m.sessionId === userSessionId);
+    if (existingMember) {
+      // Reuse existing member — update socket id and mark online
+      existingMember.id = socket.id;
+      existingMember.isOnline = true;
+      existingMember.disconnectedAt = null;
+      if (userName?.trim()) existingMember.name = userName.trim();
+
+      socket.join(id);
+      currentRoomId = id;
+      currentUser = existingMember;
+
+      const accurateTime = getRoomCurrentTime(room);
+
+      callback({
+        success: true,
+        waiting: false,
+        room: {
+          ...room,
+          hasPassword: Boolean(room.password),
+          playbackPosition: accurateTime
+        },
+        user: existingMember
+      });
+
+      io.to(id).emit('room:members-updated', {
+        members: room.members,
+        waitingList: room.waitingList
+      });
+      return;
+    }
+
+    // Also remove any stale entries for the same socket.id (edge case: same tab, no session)
+    room.members = room.members.filter(m => m.id !== socket.id);
+
     // Check if room requires host approval
     if (room.requireApproval && room.hostSessionId !== userSessionId && room.hostId !== socket.id) {
       const waitUser = {
@@ -314,6 +350,10 @@ io.on('connection', (socket) => {
       // Check if already in waiting list
       if (!room.waitingList.some(w => w.id === socket.id || w.sessionId === userSessionId)) {
         room.waitingList.push(waitUser);
+      } else {
+        // Update existing waiting entry with new socket id
+        const existingWait = room.waitingList.find(w => w.sessionId === userSessionId);
+        if (existingWait) existingWait.id = socket.id;
       }
 
       // Notify host about the waiting user
@@ -328,7 +368,7 @@ io.on('connection', (socket) => {
       });
     }
 
-    // Direct Join
+    // Direct Join — fresh user
     const user = {
       sessionId: userSessionId,
       id: socket.id,
@@ -373,10 +413,14 @@ io.on('connection', (socket) => {
     }
 
     const isHostSession = Boolean(sessionId && room.hostSessionId === sessionId);
+
+    // Remove any stale entries for the same socket.id (prevents ghost duplicates)
+    room.members = room.members.filter(m => m.id !== socket.id || m.sessionId === sessionId);
+
     let member = room.members.find(m => m.sessionId === sessionId);
 
     if (member) {
-      // Reconnecting existing member
+      // Reconnecting existing member — update socket id, mark online
       member.id = socket.id;
       member.isOnline = true;
       member.disconnectedAt = null;
@@ -386,7 +430,7 @@ io.on('connection', (socket) => {
         room.hostId = socket.id;
       }
     } else if (isHostSession) {
-      // Host reconnecting
+      // Host reconnecting but member entry was already cleaned up
       member = {
         sessionId,
         id: socket.id,
@@ -399,7 +443,7 @@ io.on('connection', (socket) => {
       room.members.unshift(member);
       room.hostId = socket.id;
     } else if (!room.requireApproval) {
-      // Member reconnecting
+      // Member reconnecting after cleanup
       member = {
         sessionId: sessionId || `sess-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         id: socket.id,
@@ -446,15 +490,27 @@ io.on('connection', (socket) => {
     if (index === -1) return;
 
     const [waitUser] = room.waitingList.splice(index, 1);
-    const member = {
-      id: waitUser.id,
-      name: waitUser.name,
-      avatarColor: waitUser.avatarColor,
-      isHost: false,
-      joinedAt: Date.now()
-    };
 
-    room.members.push(member);
+    // Check if this session already exists as a member (prevent duplicates)
+    const existingMember = room.members.find(m => m.sessionId === waitUser.sessionId);
+    if (existingMember) {
+      existingMember.id = waitUser.id;
+      existingMember.isOnline = true;
+      existingMember.disconnectedAt = null;
+    } else {
+      const member = {
+        sessionId: waitUser.sessionId,
+        id: waitUser.id,
+        name: waitUser.name,
+        avatarColor: waitUser.avatarColor,
+        isHost: false,
+        isOnline: true,
+        joinedAt: Date.now()
+      };
+      room.members.push(member);
+    }
+
+    const approvedMember = room.members.find(m => m.id === waitUser.id);
 
     // Join socket to room channel
     const targetSocket = io.sockets.sockets.get(userId);
@@ -468,7 +524,7 @@ io.on('connection', (socket) => {
           hasPassword: Boolean(room.password),
           playbackPosition: accurateTime
         },
-        user: member
+        user: approvedMember
       });
     }
 
@@ -550,6 +606,7 @@ io.on('connection', (socket) => {
     room.playbackPosition = typeof currentTime === 'number' ? currentTime : room.playbackPosition;
     room.lastStateChangeTime = Date.now();
 
+    // Broadcast to ALL clients in the room (including sender for confirmation)
     io.to(currentRoomId).emit('player:sync', {
       isPlaying: true,
       playbackPosition: room.playbackPosition,
@@ -568,6 +625,7 @@ io.on('connection', (socket) => {
     room.playbackPosition = typeof currentTime === 'number' ? currentTime : room.playbackPosition;
     room.lastStateChangeTime = Date.now();
 
+    // Broadcast to ALL clients in the room (including sender for confirmation)
     io.to(currentRoomId).emit('player:sync', {
       isPlaying: false,
       playbackPosition: room.playbackPosition,
@@ -880,8 +938,8 @@ io.on('connection', (socket) => {
     // Notify call peers of disconnection
     socket.to(currentRoomId).emit('webrtc:peer-left', { peerId: socket.id });
 
-    // Do NOT immediately delete or transfer host on a page refresh!
-    const member = room.members.find(m => m.id === socket.id || (currentUser?.sessionId && m.sessionId === currentUser.sessionId));
+    // Mark the member as offline (by socket.id match)
+    const member = room.members.find(m => m.id === socket.id);
     if (member) {
       member.isOnline = false;
       member.disconnectedAt = Date.now();
@@ -892,36 +950,61 @@ io.on('connection', (socket) => {
       waitingList: room.waitingList
     });
 
-    // 2-minute grace period before cleaning up disconnected members
+    // Also clean up any stale waiting list entries for this socket
+    room.waitingList = room.waitingList.filter(w => w.id !== socket.id);
+
+    // Store roomId in closure for the timeout
+    const disconnectedRoomId = currentRoomId;
+    const disconnectedSessionId = currentUser?.sessionId;
+
+    // 30-second grace period before cleaning up disconnected members
+    // (reduced from 2 min to avoid long ghost entries)
     setTimeout(() => {
-      const checkRoom = rooms.get(currentRoomId);
+      const checkRoom = rooms.get(disconnectedRoomId);
       if (!checkRoom) return;
 
       const now = Date.now();
       checkRoom.members = checkRoom.members.filter(m => {
-        if (!m.isOnline && m.disconnectedAt && (now - m.disconnectedAt >= 120000)) {
+        if (!m.isOnline && m.disconnectedAt && (now - m.disconnectedAt >= 30000)) {
           return false;
         }
         return true;
       });
 
       if (checkRoom.members.length === 0) {
-        rooms.delete(currentRoomId);
+        rooms.delete(disconnectedRoomId);
       } else {
+        // Re-elect host if current host was cleaned up
         if (!checkRoom.members.some(m => m.sessionId === checkRoom.hostSessionId)) {
-          checkRoom.members[0].isHost = true;
-          checkRoom.hostId = checkRoom.members[0].id;
-          checkRoom.hostSessionId = checkRoom.members[0].sessionId;
+          const onlineMember = checkRoom.members.find(m => m.isOnline) || checkRoom.members[0];
+          onlineMember.isHost = true;
+          checkRoom.hostId = onlineMember.id;
+          checkRoom.hostSessionId = onlineMember.sessionId;
         }
 
-        io.to(currentRoomId).emit('room:members-updated', {
+        io.to(disconnectedRoomId).emit('room:members-updated', {
           members: checkRoom.members,
           waitingList: checkRoom.waitingList
         });
       }
-    }, 120000);
+    }, 30000);
   });
 });
+
+// Periodic playback heartbeat: broadcast accurate time to all rooms every 5 seconds
+// This ensures all clients stay perfectly in sync like a real theater
+setInterval(() => {
+  for (const [roomId, room] of rooms) {
+    if (room.isPlaying && room.currentTrack) {
+      const accurateTime = getRoomCurrentTime(room);
+      io.to(roomId).emit('player:time-sync', {
+        playbackPosition: accurateTime,
+        isPlaying: room.isPlaying,
+        serverTimestamp: Date.now()
+      });
+    }
+  }
+}, 5000);
 
 // Serve compiled React frontend in production (All-in-One Monorepo Deployment)
 const distPath = path.resolve(process.cwd(), 'dist');

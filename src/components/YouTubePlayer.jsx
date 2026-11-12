@@ -3,7 +3,9 @@ import socket from '../services/socket';
 
 /**
  * Synchronized YouTube IFrame Player
- * Synchronizes play/pause/seek across all connected room members.
+ * True theater mode: server is the single source of truth for play/pause/seek.
+ * The player ONLY reflects what the server tells it — it never emits back
+ * to avoid echo loops that desync rooms.
  */
 export default function YouTubePlayer({
   currentTrack,
@@ -22,9 +24,13 @@ export default function YouTubePlayer({
   const [isReady, setIsReady] = useState(false);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
 
-  // Flags to avoid echo loops between socket emits and player events
+  // Flag: when true, we are programmatically controlling the player.
+  // ALL state changes from the YT player are ignored — we never emit back to socket
+  // from onStateChange because the controls in CommonScreen already do that.
   const isInternalUpdate = useRef(false);
-  const lastStateChangeTimestamp = useRef(0);
+
+  // Track the last known props to detect real changes
+  const lastSyncRef = useRef({ isPlaying: false, playbackPosition: 0, trackId: null });
 
   // Load YouTube IFrame API
   useEffect(() => {
@@ -70,7 +76,8 @@ export default function YouTubePlayer({
         fs: 0,
         modestbranding: 1,
         rel: 0,
-        origin: window.location.origin
+        origin: window.location.origin,
+        playsinline: 1 // Important for mobile
       },
       events: {
         onReady: (event) => {
@@ -96,42 +103,70 @@ export default function YouTubePlayer({
     });
   };
 
-  // Handle changes from user interacting with YouTube embed directly
+  // Handle YouTube player state changes
+  // IMPORTANT: We do NOT emit socket events here. The CommonScreen controls
+  // are the only thing that emit play/pause/seek to the server.
+  // This handler only detects autoplay blocks and track endings.
   const handlePlayerStateChange = useCallback((event) => {
-    if (!isReady || isInternalUpdate.current) return;
+    if (!isReady) return;
 
-    const player = event.target;
     const playerState = event.data;
 
-    // Check if DJ Mode restricts control to host only
-    if (djMode && !isHost) return;
-
+    // Detect autoplay blocked (browser policy)
     if (playerState === window.YT.PlayerState.PLAYING) {
       setAutoplayBlocked(false);
-      const currentTime = player.getCurrentTime();
-      socket.emit('player:play', { currentTime });
-    } else if (playerState === window.YT.PlayerState.PAUSED) {
-      const currentTime = player.getCurrentTime();
-      socket.emit('player:pause', { currentTime });
-    } else if (playerState === window.YT.PlayerState.ENDED) {
+    }
+
+    // Detect track ended — notify server to advance queue
+    if (playerState === window.YT.PlayerState.ENDED && !isInternalUpdate.current) {
       socket.emit('player:track-end');
     }
-  }, [isReady, djMode, isHost]);
 
-  // Synchronize player with room state
-  const syncPlayerState = (targetPlaying, targetPosition) => {
+    // If the YT player spontaneously paused/played (e.g. user clicked the
+    // invisible YT controls, ad interruption, etc.) and it doesn't match
+    // our intended state, force it back into compliance after a short delay.
+    if (!isInternalUpdate.current) {
+      setTimeout(() => {
+        const player = playerRef.current;
+        if (!player || typeof player.getPlayerState !== 'function') return;
+        const currentState = player.getPlayerState();
+        const lastSync = lastSyncRef.current;
+        
+        if (lastSync.isPlaying && currentState === window.YT.PlayerState.PAUSED) {
+          // Should be playing but YT paused itself — force play
+          isInternalUpdate.current = true;
+          player.playVideo();
+          setTimeout(() => { isInternalUpdate.current = false; }, 500);
+        } else if (!lastSync.isPlaying && currentState === window.YT.PlayerState.PLAYING) {
+          // Should be paused but YT started playing — force pause
+          isInternalUpdate.current = true;
+          player.pauseVideo();
+          setTimeout(() => { isInternalUpdate.current = false; }, 500);
+        }
+      }, 200);
+    }
+  }, [isReady]);
+
+  // Synchronize player with room state (called when props change)
+  const syncPlayerState = useCallback((targetPlaying, targetPosition) => {
     const player = playerRef.current;
     if (!player || !isReady || typeof player.getPlayerState !== 'function') return;
 
     isInternalUpdate.current = true;
-    lastStateChangeTimestamp.current = Date.now();
+
+    // Store what we're syncing to
+    lastSyncRef.current = { 
+      isPlaying: targetPlaying, 
+      playbackPosition: targetPosition,
+      trackId: currentTrack?.id 
+    };
 
     try {
       const currentPos = player.getCurrentTime() || 0;
       const drift = Math.abs(currentPos - targetPosition);
 
-      // Re-align if position drift is greater than 1.5 seconds
-      if (drift > 1.5) {
+      // Re-align if position drift is greater than 2 seconds
+      if (drift > 2) {
         player.seekTo(targetPosition, true);
       }
 
@@ -147,11 +182,12 @@ export default function YouTubePlayer({
     } catch (err) {
       console.warn('Error during player sync:', err);
     } finally {
+      // Keep the internal flag longer to absorb any YT state change events
       setTimeout(() => {
         isInternalUpdate.current = false;
-      }, 300);
+      }, 600);
     }
-  };
+  }, [isReady, currentTrack?.id]);
 
   // Change video when currentTrack changes
   useEffect(() => {
@@ -161,6 +197,8 @@ export default function YouTubePlayer({
     const currentLoadedId = player.getVideoData ? player.getVideoData().video_id : null;
     if (currentLoadedId !== currentTrack.id) {
       isInternalUpdate.current = true;
+      lastSyncRef.current = { isPlaying, playbackPosition, trackId: currentTrack.id };
+      
       player.loadVideoById({
         videoId: currentTrack.id,
         startSeconds: playbackPosition || 0
@@ -170,11 +208,11 @@ export default function YouTubePlayer({
         setTimeout(() => {
           player.pauseVideo();
           isInternalUpdate.current = false;
-        }, 150);
+        }, 300);
       } else {
         setTimeout(() => {
           isInternalUpdate.current = false;
-        }, 300);
+        }, 600);
       }
     }
   }, [currentTrack?.id, isReady]);
@@ -184,7 +222,7 @@ export default function YouTubePlayer({
     if (isReady && currentTrack?.id) {
       syncPlayerState(isPlaying, playbackPosition);
     }
-  }, [isPlaying, playbackPosition, isReady]);
+  }, [isPlaying, playbackPosition, isReady, syncPlayerState]);
 
   // Volume & Mute updates
   useEffect(() => {
@@ -198,7 +236,7 @@ export default function YouTubePlayer({
     }
   }, [volume, isMuted, isReady]);
 
-  // Periodic time updates & drift check
+  // Periodic time updates & gentle drift check
   useEffect(() => {
     const interval = setInterval(() => {
       const player = playerRef.current;
@@ -215,16 +253,16 @@ export default function YouTubePlayer({
           onCurrentTimeChange(currentPos);
         }
 
-        // Periodic drift correction when playing
+        // Periodic drift correction when playing (gentler threshold)
         if (isPlaying && !isInternalUpdate.current) {
           const expectedPos = playbackPosition;
-          if (expectedPos > 0 && Math.abs(currentPos - expectedPos) > 2.5) {
+          if (expectedPos > 0 && Math.abs(currentPos - expectedPos) > 3) {
             console.log(`Drift detected: client=${currentPos.toFixed(1)}s room=${expectedPos.toFixed(1)}s. Correcting...`);
             isInternalUpdate.current = true;
             player.seekTo(expectedPos, true);
             setTimeout(() => {
               isInternalUpdate.current = false;
-            }, 300);
+            }, 500);
           }
         }
       } catch (e) {
@@ -265,7 +303,7 @@ export default function YouTubePlayer({
       {/* Embedded IFrame container */}
       <div 
         ref={containerRef} 
-        className="w-full h-full pointer-events-auto"
+        className="w-full h-full pointer-events-none"
       />
     </div>
   );

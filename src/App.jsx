@@ -129,6 +129,15 @@ export default function App() {
       }
     };
 
+    // Server periodic heartbeat — keeps all clients in perfect theater sync
+    const handleTimeSync = ({ playbackPosition: serverPos, isPlaying: serverPlaying }) => {
+      if (typeof serverPos === 'number') {
+        setPlaybackPosition(serverPos);
+      }
+      // Also enforce play state in case it drifted
+      setIsPlaying(serverPlaying);
+    };
+
     const handleMembersUpdated = ({ members: newMembers, waitingList: newWaiting }) => {
       if (newMembers) setMembers(newMembers);
       if (newWaiting) setWaitingList(newWaiting);
@@ -183,6 +192,7 @@ export default function App() {
     socket.on('player:sync', handlePlayerSync);
     socket.on('player:track-change', handleTrackChange);
     socket.on('player:seek', handlePlayerSeek);
+    socket.on('player:time-sync', handleTimeSync);
     socket.on('room:members-updated', handleMembersUpdated);
     socket.on('room:waiting-list-updated', handleWaitingListUpdated);
     socket.on('room:name-updated', handleRoomNameUpdated);
@@ -191,10 +201,34 @@ export default function App() {
     socket.on('chat:message', handleChatMessage);
     socket.on('reaction:received', handleReactionReceived);
 
+    // Handle socket reconnection — automatically rejoin the room
+    const handleReconnect = () => {
+      const savedSessionRaw = localStorage.getItem('togetherTune_activeSession');
+      if (savedSessionRaw) {
+        try {
+          const savedSession = JSON.parse(savedSessionRaw);
+          const mySessionId = savedSession.sessionId || getSessionId();
+          if (savedSession.roomId) {
+            socket.emit('room:resume', {
+              roomId: savedSession.roomId,
+              sessionId: mySessionId,
+              userName: savedSession.userName
+            }, (response) => {
+              if (response && response.success) {
+                handleRoomJoined(response.room, response.user);
+              }
+            });
+          }
+        } catch (e) {}
+      }
+    };
+    socket.on('connect', handleReconnect);
+
     return () => {
       socket.off('player:sync', handlePlayerSync);
       socket.off('player:track-change', handleTrackChange);
       socket.off('player:seek', handlePlayerSeek);
+      socket.off('player:time-sync', handleTimeSync);
       socket.off('room:members-updated', handleMembersUpdated);
       socket.off('room:waiting-list-updated', handleWaitingListUpdated);
       socket.off('room:name-updated', handleRoomNameUpdated);
@@ -202,6 +236,7 @@ export default function App() {
       socket.off('queue:updated', handleQueueUpdated);
       socket.off('chat:message', handleChatMessage);
       socket.off('reaction:received', handleReactionReceived);
+      socket.off('connect', handleReconnect);
     };
   }, []);
 

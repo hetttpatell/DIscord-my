@@ -251,7 +251,7 @@ io.on('connection', (socket) => {
 
     const newRoom = {
       id,
-      name: roomName.trim() || `TogetherTune Room`,
+      name: roomName.trim() || `afterspot Lounge`,
       password: password ? password.trim() : null,
       requireApproval: Boolean(requireApproval),
       hostId: socket.id,
@@ -925,5 +925,5 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
-  console.log(`TogetherTune server listening on http://localhost:${PORT}`);
+  console.log(`afterspot server listening on http://localhost:${PORT}`);
 });

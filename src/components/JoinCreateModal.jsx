@@ -81,7 +81,7 @@ export default function JoinCreateModal({
 
     socket.emit('room:create', {
       roomId: generatedId,
-      roomName: createRoomName.trim() || 'TogetherTune Stage',
+      roomName: createRoomName.trim() || 'afterspot Lounge',
       password: createPassword.trim(),
       userName: createUserName.trim() || 'Host',
       sessionId,
@@ -135,14 +135,20 @@ export default function JoinCreateModal({
         
         {/* Brand Header */}
         <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-3xl bg-[#5865f2] text-white shadow-lg mb-3">
-            <Radio className="w-7 h-7" />
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-3xl bg-gradient-to-tr from-[#5865f2] to-[#4752c4] text-white shadow-xl shadow-[#5865f2]/25 mb-3 ring-4 ring-[#5865f2]/20">
+            {/* afterspot Custom Logo */}
+            <svg className="w-8 h-8" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M19 46L32 15L45 46" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M24 35H40" stroke="#FFFFFF" strokeWidth="5" strokeLinecap="round" />
+              <circle cx="46" cy="17" r="7.5" fill="#23A55A" stroke="#1E1F22" strokeWidth="2.5" />
+              <circle cx="46" cy="17" r="3" fill="#FFFFFF" />
+            </svg>
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">
-            Together<span className="text-[#5865f2]">Tune</span>
+          <h1 className="text-2xl font-black text-white tracking-tight">
+            after<span className="text-[#5865f2]">spot</span>
           </h1>
           <p className="text-xs text-[#949ba4] mt-1">
-            Discord-Style Shared Watch &amp; Listening Stage
+            Discord-Style Real-Time Watch &amp; Listening Lounge
           </p>
         </div>
 

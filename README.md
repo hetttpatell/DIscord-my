@@ -1,6 +1,6 @@
-# TogetherTune 🎵 — Real-Time Shared Music Listening Platform
+# afterspot 🎵 — Real-Time Shared Watch Party & Music Platform
 
-**TogetherTune** is a modern collaborative web platform that lets friends listen to music together in real-time through private shared rooms. Every member in the room watches and listens on a synchronized common screen, shares a collaborative queue, and can react and chat live.
+**afterspot** is a modern Discord-inspired collaborative web platform that lets friends watch videos and listen to music together in real-time through private shared rooms. Every member in the room watches and listens on a synchronized stage, joins low-latency WebRTC voice and video calls, shares a collaborative queue, and can react and chat live.
 
 ---
 

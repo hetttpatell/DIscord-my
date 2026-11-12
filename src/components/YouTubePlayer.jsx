@@ -104,9 +104,7 @@ export default function YouTubePlayer({
   };
 
   // Handle YouTube player state changes
-  // IMPORTANT: We do NOT emit socket events here. The CommonScreen controls
-  // are the only thing that emit play/pause/seek to the server.
-  // This handler only detects autoplay blocks and track endings.
+  // When user interacts with the YouTube player directly, broadcast to the room!
   const handlePlayerStateChange = useCallback((event) => {
     if (!isReady) return;
 
@@ -120,34 +118,36 @@ export default function YouTubePlayer({
     // Detect track ended — notify server to advance queue
     if (playerState === window.YT.PlayerState.ENDED && !isInternalUpdate.current) {
       socket.emit('player:track-end');
+      return;
     }
 
-    // If the YT player spontaneously paused/played (e.g. user clicked the
-    // invisible YT controls, ad interruption, etc.) and it doesn't match
-    // our intended state, force it back into compliance after a short delay.
-    if (!isInternalUpdate.current) {
+    // If change was triggered programmatically by socket sync, ignore it
+    if (isInternalUpdate.current) return;
+
+    const player = event.target;
+    const currentPos = player.getCurrentTime ? player.getCurrentTime() : 0;
+
+    // User physically clicked pause inside the player -> Sync pause to all room members
+    if (playerState === window.YT.PlayerState.PAUSED) {
+      lastSyncRef.current.isPlaying = false;
+      isInternalUpdate.current = true;
+      socket.emit('player:pause', { currentTime: currentPos });
       setTimeout(() => {
-        const player = playerRef.current;
-        if (!player || typeof player.getPlayerState !== 'function') return;
-        const currentState = player.getPlayerState();
-        const lastSync = lastSyncRef.current;
-        
-        if (lastSync.isPlaying && currentState === window.YT.PlayerState.PAUSED) {
-          // Should be playing but YT paused itself — force play
-          isInternalUpdate.current = true;
-          player.playVideo();
-          setTimeout(() => { isInternalUpdate.current = false; }, 500);
-        } else if (!lastSync.isPlaying && currentState === window.YT.PlayerState.PLAYING) {
-          // Should be paused but YT started playing — force pause
-          isInternalUpdate.current = true;
-          player.pauseVideo();
-          setTimeout(() => { isInternalUpdate.current = false; }, 500);
-        }
-      }, 200);
+        isInternalUpdate.current = false;
+      }, 500);
+    } 
+    // User physically clicked play inside the player -> Sync play to all room members
+    else if (playerState === window.YT.PlayerState.PLAYING) {
+      lastSyncRef.current.isPlaying = true;
+      isInternalUpdate.current = true;
+      socket.emit('player:play', { currentTime: currentPos });
+      setTimeout(() => {
+        isInternalUpdate.current = false;
+      }, 500);
     }
   }, [isReady]);
 
-  // Synchronize player with room state (called when props change)
+  // Synchronize player with room state (called when props change from server socket)
   const syncPlayerState = useCallback((targetPlaying, targetPosition) => {
     const player = playerRef.current;
     if (!player || !isReady || typeof player.getPlayerState !== 'function') return;
@@ -165,19 +165,27 @@ export default function YouTubePlayer({
       const currentPos = player.getCurrentTime() || 0;
       const drift = Math.abs(currentPos - targetPosition);
 
-      // Re-align if position drift is greater than 2 seconds
-      if (drift > 2) {
-        player.seekTo(targetPosition, true);
-      }
-
-      const currentState = player.getPlayerState();
-      if (targetPlaying && currentState !== window.YT.PlayerState.PLAYING) {
+      if (targetPlaying) {
+        // Re-align if position drift is greater than 2 seconds
+        if (drift > 2) {
+          player.seekTo(targetPosition, true);
+        }
         const playPromise = player.playVideo();
         if (playPromise && typeof playPromise.catch === 'function') {
           playPromise.catch(() => setAutoplayBlocked(true));
         }
-      } else if (!targetPlaying && currentState === window.YT.PlayerState.PLAYING) {
+      } else {
+        // Paused on server — unconditionally pause YouTube!
         player.pauseVideo();
+        if (drift > 1.5) {
+          player.seekTo(targetPosition, true);
+          // Ensure it stays paused after seeking
+          setTimeout(() => {
+            if (player && typeof player.pauseVideo === 'function') {
+              player.pauseVideo();
+            }
+          }, 50);
+        }
       }
     } catch (err) {
       console.warn('Error during player sync:', err);
@@ -185,7 +193,7 @@ export default function YouTubePlayer({
       // Keep the internal flag longer to absorb any YT state change events
       setTimeout(() => {
         isInternalUpdate.current = false;
-      }, 600);
+      }, 800);
     }
   }, [isReady, currentTrack?.id]);
 

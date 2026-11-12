@@ -923,6 +923,17 @@ io.on('connection', (socket) => {
   });
 });
 
+// Serve compiled React frontend in production (All-in-One Monorepo Deployment)
+const distPath = path.resolve(process.cwd(), 'dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api') && !req.path.startsWith('/socket.io')) {
+      res.sendFile(path.resolve(distPath, 'index.html'));
+    }
+  });
+}
+
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
   console.log(`afterspot server listening on http://localhost:${PORT}`);

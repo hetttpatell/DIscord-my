@@ -1,12 +1,13 @@
 services:
   - type: web
-    name: afterspot-backend
+    name: afterspot
     env: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: PORT
         value: 10000
       - key: NODE_ENV
         value: production
+

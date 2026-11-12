@@ -1166,8 +1166,8 @@ export default function CommonScreen({
             onToggleLayoutMode={() => setCallLayoutMode(prev => prev === 'strip' ? 'grid' : 'strip')}
             onLeaveRoom={handleLeaveRoom}
           >
-            {/* 16:9 Stream Container */}
-            <div className="relative w-full max-w-[1280px] max-h-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-[#383a40] flex items-center justify-center">
+            {/* 16:9 Stream Container - Full width on mobile, rounded card on desktop */}
+            <div className="relative w-full max-w-[1280px] max-h-full aspect-video bg-black rounded-none sm:rounded-xl overflow-hidden shadow-2xl border-y sm:border border-[#383a40] flex items-center justify-center">
               
               {currentTrack ? (
                 <>
@@ -1246,8 +1246,8 @@ export default function CommonScreen({
             </div>
           </VideoCallGrid>
 
-          {/* STREAM BOTTOM CONTROLS BAR */}
-          <div className="bg-[#2b2d31] border-t border-[#232428] px-3 sm:px-4 py-2 sm:py-2.5 flex flex-col gap-1.5 sm:gap-2 flex-shrink-0">
+          {/* STREAM BOTTOM CONTROLS BAR - Sticky with mobile safe-area inset */}
+          <div className="bg-[#2b2d31] border-t border-[#232428] px-3 sm:px-4 pt-2 pb-[max(0.6rem,env(safe-area-inset-bottom))] sm:py-2.5 flex flex-col gap-1.5 sm:gap-2 flex-shrink-0 z-20 select-none">
             
             {/* Timeline Scrubber */}
             <div className="flex items-center gap-2 sm:gap-3">

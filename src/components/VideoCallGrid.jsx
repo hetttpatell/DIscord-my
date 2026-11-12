@@ -681,11 +681,11 @@ export default function VideoCallGrid({
       {/* 2. MAIN CONTENT: THEATER VIEW vs GOOGLE MEET VIEW */}
       {layoutMode === 'grid' ? (
         /* GOOGLE MEET FULL VIEW: Shared Music Video Stage + All Participants Meet Grid Side-by-Side */
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden bg-[#111214] p-2 sm:p-2.5 gap-2 sm:gap-2.5">
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden bg-[#111214] p-0 sm:p-2.5 gap-2 sm:gap-2.5">
           
           {/* Main: Shared Music Video Stage */}
           {children ? (
-            <div className="flex-1 min-h-[200px] sm:min-h-[250px] lg:min-h-0 relative flex items-center justify-center bg-black rounded-xl overflow-hidden shadow-2xl border border-[#3c4043]/40">
+            <div className="flex-1 min-h-[180px] sm:min-h-[250px] lg:min-h-0 w-full relative flex items-center justify-center bg-black rounded-none sm:rounded-xl overflow-hidden shadow-2xl border-0 sm:border border-[#3c4043]/40">
               {children}
             </div>
           ) : null}
@@ -824,8 +824,8 @@ export default function VideoCallGrid({
             </div>
           )}
 
-          {/* Theater Screen Container */}
-          <div className="flex-1 min-h-0 relative flex items-center justify-center bg-[#111214] p-1.5 sm:p-3 overflow-hidden">
+          {/* Theater Screen Container - Full width and non-scrollable on mobile */}
+          <div className="flex-1 min-h-0 relative flex items-center justify-center bg-[#111214] p-0 sm:p-3 overflow-hidden w-full select-none touch-none">
             {children}
           </div>
         </div>

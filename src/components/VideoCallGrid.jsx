@@ -31,8 +31,8 @@ export default function VideoCallGrid({
   layoutMode = 'strip', // 'strip' (above video player) | 'grid' (Google Meet full grid)
   onToggleLayoutMode
 }) {
-  const [isInCall, setIsInCall] = useState(false);
-  const [isMicOn, setIsMicOn] = useState(false);
+  const [isInCall, setIsInCall] = useState(true); // Always in call by default
+  const [isMicOn, setIsMicOn] = useState(true);   // Mic on by default
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [peers, setPeers] = useState({}); // { [peerId]: { stream, userName, avatarColor, isMuted, isCameraOff } }
@@ -43,9 +43,47 @@ export default function VideoCallGrid({
   const peerConnections = useRef({}); // { [peerId]: RTCPeerConnection }
   const audioContextRef = useRef(null);
 
-  // Clean up on unmount
+  // Auto-join voice call immediately when entering the room
   useEffect(() => {
+    let isMounted = true;
+
+    const autoJoinVoice = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false
+        });
+
+        if (!isMounted) {
+          stream.getTracks().forEach(t => t.stop());
+          return;
+        }
+
+        localStreamRef.current = stream;
+        setIsInCall(true);
+        setIsMicOn(true);
+        setIsCameraOn(false);
+
+        // Notify room of initial media state
+        socket.emit('webrtc:media-state', {
+          isMuted: false,
+          isCameraOff: true,
+          isScreenSharing: false
+        });
+      } catch (err) {
+        console.warn('Microphone auto-permission waiting for user gesture or permission:', err);
+        // User is still connected to the voice lounge, mic is muted until they tap unmute
+        if (isMounted) {
+          setIsInCall(true);
+          setIsMicOn(false);
+        }
+      }
+    };
+
+    autoJoinVoice();
+
     return () => {
+      isMounted = false;
       leaveCall();
     };
   }, []);
@@ -256,9 +294,33 @@ export default function VideoCallGrid({
     socket.emit('webrtc:leave-call');
   };
 
-  // Toggle Microphone
-  const toggleMic = () => {
-    if (!localStreamRef.current) return;
+  // Toggle Microphone (with auto-request fallback on user gesture)
+  const toggleMic = async () => {
+    if (!localStreamRef.current) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        localStreamRef.current = stream;
+        setIsInCall(true);
+        setIsMicOn(true);
+
+        // Add tracks to existing peer connections
+        const audioTrack = stream.getAudioTracks()[0];
+        Object.values(peerConnections.current).forEach(pc => {
+          if (audioTrack) pc.addTrack(audioTrack, stream);
+        });
+
+        socket.emit('webrtc:media-state', {
+          isMuted: false,
+          isCameraOff: !isCameraOn,
+          isScreenSharing
+        });
+        return;
+      } catch (err) {
+        alert('Could not access microphone. Please check browser permissions.');
+        return;
+      }
+    }
+
     const audioTrack = localStreamRef.current.getAudioTracks()[0];
     if (audioTrack) {
       audioTrack.enabled = !audioTrack.enabled;
@@ -373,122 +435,127 @@ export default function VideoCallGrid({
     }
   };
 
-  // Count active video tiles
+  // Count active video tiles & check if any video is streaming
   const peerList = Object.entries(peers);
-  const totalCallCount = isInCall ? peerList.length + 1 : peerList.length;
+  const totalCallCount = peerList.length + 1;
+  const hasActiveVideo = isCameraOn || isScreenSharing || peerList.some(([_, p]) => !p.isCameraOff && p.stream?.getVideoTracks().length > 0);
 
   return (
-    <div className="w-full flex flex-col transition-all">
+    <div className="w-full flex flex-col transition-all flex-shrink-0 z-20">
       
-      {/* 1. CALL CONTROLS DOCK (Google Meet Style Bar) */}
-      <div className="h-10 bg-[#1e1f22]/95 border-b border-[#2b2d31] px-4 flex items-center justify-between backdrop-blur-md">
+      {/* 1. DISCORD VOICE STAGE BAR (Always Active, Instant Voice) */}
+      <div className="h-10 bg-[#1e1f22]/95 border-b border-[#232428] px-2.5 sm:px-4 flex items-center justify-between backdrop-blur-md">
         
-        {/* Left: Call Status Badge */}
-        <div className="flex items-center gap-2">
-          {isInCall ? (
-            <div className="flex items-center gap-1.5 text-xs text-[#23a55a] font-bold">
-              <span className="w-2 h-2 rounded-full bg-[#23a55a] animate-ping" />
-              <span>In Call ({totalCallCount})</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 text-xs text-[#949ba4]">
-              <PhoneCall className="w-3.5 h-3.5 text-[#5865f2]" />
-              <span className="hidden sm:inline">Voice &amp; Video Call</span>
-            </div>
-          )}
-        </div>
+        {/* Left: Voice Status & Participant Avatars */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0">
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <span className="w-2 h-2 rounded-full bg-[#23a55a] animate-ping" />
+            <span className="text-xs font-bold text-[#23a55a]">Voice Live</span>
+            <span className="text-[10px] bg-[#23a55a]/15 text-[#23a55a] font-mono font-bold px-1.5 py-0.2 rounded-full border border-[#23a55a]/30">
+              {totalCallCount}
+            </span>
+          </div>
 
-        {/* Center: Meeting Action Buttons */}
-        <div className="flex items-center gap-2">
-          {!isInCall ? (
-            <button
-              onClick={() => joinCall(true)}
-              className="flex items-center gap-1.5 text-xs bg-[#23a55a] hover:bg-[#1f924f] text-white px-3 py-1 rounded-full font-bold shadow-md transition-all active:scale-95"
+          <div className="hidden xs:block h-3.5 w-[1px] bg-[#383a40]" />
+
+          {/* Connected Voice Members Facepile */}
+          <div className="flex items-center -space-x-1.5 overflow-hidden">
+            {/* Current user's avatar */}
+            <div 
+              className={`relative w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow ring-2 flex-shrink-0 ${
+                isMicOn ? 'ring-[#23a55a]' : 'ring-[#f23f43]'
+              }`}
+              style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
+              title={`${currentUser?.name || 'You'} (${isMicOn ? 'Mic On' : 'Muted'})`}
             >
-              <Video className="w-3.5 h-3.5" />
-              <span>Join Voice &amp; Video</span>
-            </button>
-          ) : (
-            <>
-              {/* Mic Toggle */}
-              <button
-                onClick={toggleMic}
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-white transition-all shadow-sm ${
-                  isMicOn ? 'bg-[#35373c] hover:bg-[#404249]' : 'bg-[#f23f43] hover:bg-[#da373b]'
-                }`}
-                title={isMicOn ? 'Mute Microphone' : 'Unmute Microphone'}
-              >
-                {isMicOn ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
-              </button>
+              {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+              {!isMicOn && (
+                <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-[#f23f43] rounded-full border border-[#1e1f22]" />
+              )}
+            </div>
 
-              {/* Camera Toggle */}
-              <button
-                onClick={toggleCamera}
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-white transition-all shadow-sm ${
-                  isCameraOn ? 'bg-[#35373c] hover:bg-[#404249]' : 'bg-[#f23f43] hover:bg-[#da373b]'
+            {/* Remote peers' avatars */}
+            {peerList.map(([peerId, peerData]) => (
+              <div 
+                key={peerId}
+                className={`relative w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow ring-2 flex-shrink-0 ${
+                  peerData.isMuted ? 'ring-[#383a40]' : 'ring-[#23a55a]'
                 }`}
-                title={isCameraOn ? 'Turn Camera Off' : 'Turn Camera On'}
+                style={{ backgroundColor: peerData.avatarColor || '#5865f2' }}
+                title={`${peerData.userName || 'Member'} (${peerData.isMuted ? 'Muted' : 'Speaking'})`}
               >
-                {isCameraOn ? <Video className="w-3.5 h-3.5" /> : <VideoOff className="w-3.5 h-3.5" />}
-              </button>
-
-              {/* Screen Share */}
-              <button
-                onClick={toggleScreenShare}
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-white transition-all shadow-sm ${
-                  isScreenSharing ? 'bg-[#5865f2] hover:bg-[#4752c4]' : 'bg-[#35373c] hover:bg-[#404249]'
-                }`}
-                title={isScreenSharing ? 'Stop Screen Share' : 'Share Your Screen'}
-              >
-                <ScreenShare className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Leave Call */}
-              <button
-                onClick={leaveCall}
-                className="w-7 h-7 rounded-full bg-[#f23f43] hover:bg-[#da373b] flex items-center justify-center text-white transition-all shadow-sm"
-                title="Leave Voice/Video Call"
-              >
-                <PhoneOff className="w-3.5 h-3.5" />
-              </button>
-            </>
-          )}
+                {peerData.userName?.charAt(0).toUpperCase() || 'P'}
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* Right: Layout Switcher */}
-        <div className="flex items-center gap-1.5">
+        {/* Right: Quick Stage Controls */}
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+          {/* Mic Toggle Button */}
+          <button
+            onClick={toggleMic}
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1 rounded-full text-xs font-bold transition-all shadow-sm active:scale-95 ${
+              isMicOn
+                ? 'bg-[#23a55a] hover:bg-[#1f924f] text-white'
+                : 'bg-[#f23f43] hover:bg-[#da373b] text-white animate-pulse'
+            }`}
+            title={isMicOn ? 'Mute Microphone' : 'Unmute Microphone'}
+          >
+            {isMicOn ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+            <span className="text-[11px]">{isMicOn ? 'Mic On' : 'Muted'}</span>
+          </button>
+
+          {/* Camera Toggle Button */}
+          <button
+            onClick={toggleCamera}
+            className={`flex items-center gap-1 p-1.5 rounded-lg text-xs font-semibold transition-all border ${
+              isCameraOn
+                ? 'bg-[#5865f2] text-white border-[#5865f2]'
+                : 'bg-[#2b2d31] hover:bg-[#35373c] text-[#949ba4] hover:text-white border-[#383a40]'
+            }`}
+            title={isCameraOn ? 'Turn Camera Off' : 'Turn Camera On'}
+          >
+            {isCameraOn ? <Video className="w-3.5 h-3.5" /> : <VideoOff className="w-3.5 h-3.5" />}
+            <span className="hidden md:inline text-[11px]">{isCameraOn ? 'Cam On' : 'Cam'}</span>
+          </button>
+
+          {/* Screen Share (Desktop Only) */}
+          <button
+            onClick={toggleScreenShare}
+            className={`hidden sm:flex items-center gap-1 p-1.5 rounded-lg text-xs font-semibold transition-all border ${
+              isScreenSharing
+                ? 'bg-[#5865f2] text-white border-[#5865f2]'
+                : 'bg-[#2b2d31] hover:bg-[#35373c] text-[#949ba4] hover:text-white border-[#383a40]'
+            }`}
+            title={isScreenSharing ? 'Stop Screen Share' : 'Share Screen'}
+          >
+            <ScreenShare className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Layout Mode Toggle */}
           <button
             onClick={onToggleLayoutMode}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+            className={`flex items-center gap-1 p-1.5 rounded-lg text-xs font-semibold transition-all border ${
               layoutMode === 'grid'
-                ? 'bg-[#5865f2] text-white shadow-sm'
-                : 'text-[#949ba4] hover:text-white hover:bg-[#35373c]'
+                ? 'bg-[#5865f2] text-white border-[#5865f2]'
+                : 'bg-[#2b2d31] hover:bg-[#35373c] text-[#949ba4] hover:text-white border-[#383a40]'
             }`}
-            title={layoutMode === 'grid' ? 'Switch to Watch Party View' : 'Switch to Full Google Meet Grid'}
+            title={layoutMode === 'grid' ? 'Switch to Theater View' : 'Switch to Full Meet Grid'}
           >
-            {layoutMode === 'grid' ? (
-              <>
-                <Tv className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Stream View</span>
-              </>
-            ) : (
-              <>
-                <LayoutGrid className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Meet Grid</span>
-              </>
-            )}
+            {layoutMode === 'grid' ? <Tv className="w-3.5 h-3.5" /> : <LayoutGrid className="w-3.5 h-3.5" />}
           </button>
         </div>
 
       </div>
 
-      {/* 2. VIDEO TILES CONTAINER */}
-      {isInCall && (
+      {/* 2. VIDEO TILES CONTAINER (Appears when camera is active or in Meet Grid mode) */}
+      {(hasActiveVideo || layoutMode === 'grid') && (
         <div 
           className={`w-full bg-[#111214] p-2 transition-all ${
             layoutMode === 'grid' 
               ? 'flex-1 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 overflow-y-auto max-h-[75vh]' 
-              : 'flex items-center gap-2 overflow-x-auto border-b border-[#2b2d31] custom-scrollbar'
+              : 'flex items-center gap-2 overflow-x-auto border-b border-[#2b2d31] no-scrollbar max-h-28'
           }`}
         >
           {/* USER'S OWN VIDEO TILE */}

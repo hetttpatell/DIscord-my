@@ -321,7 +321,7 @@ export default function CommonScreen({
   const activeTime = isScrubbing ? scrubValue : currentTime;
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#1e1f22] text-[#dbdee1] overflow-hidden select-none font-sans">
+    <div className="flex flex-col h-full h-[100dvh] w-full max-w-full bg-[#1e1f22] text-[#dbdee1] overflow-hidden overscroll-none select-none font-sans fixed inset-0">
       
       {/* 1. DISCORD TOP TITLEBAR / APP HEADER */}
       <header className="h-12 bg-[#1e1f22] border-b border-[#232428] px-2.5 sm:px-4 flex items-center justify-between flex-shrink-0 relative z-50">
@@ -333,7 +333,7 @@ export default function CommonScreen({
               setIsLeftDrawerOpen(true);
               setIsRightDrawerOpen(false);
             }}
-            className="p-1.5 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#2b2d31] lg:hidden transition-colors flex-shrink-0"
+            className="p-1.5 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#2b2d31] lg:hidden transition-colors flex-shrink-0 active:scale-95"
             title="Channels & Members Drawer"
           >
             <Menu className="w-5 h-5" />
@@ -378,7 +378,7 @@ export default function CommonScreen({
                 </form>
               ) : (
                 <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
-                  <span className="font-bold text-white text-xs sm:text-sm tracking-wide max-w-[100px] sm:max-w-[160px] md:max-w-[200px] truncate">
+                  <span className="font-bold text-white text-xs sm:text-sm tracking-wide max-w-[95px] xs:max-w-[130px] sm:max-w-[160px] md:max-w-[200px] truncate">
                     {room.name || 'afterspot Lounge'}
                   </span>
                   {isHost && (
@@ -403,7 +403,7 @@ export default function CommonScreen({
 
           <div className="hidden sm:block h-4 w-[1px] bg-[#383a40] mx-0.5" />
 
-          {/* Quick Copy ID & Invite Buttons */}
+          {/* Quick Copy ID & Invite Buttons (Desktop) */}
           <button
             onClick={handleCopyId}
             className="hidden sm:flex items-center gap-1 text-xs text-[#949ba4] hover:text-[#dbdee1] bg-[#2b2d31] hover:bg-[#35373c] px-2 py-1 rounded-md transition-colors"
@@ -426,13 +426,13 @@ export default function CommonScreen({
         {/* Subtle click-dismissal backdrop behind dropdown */}
         {isSearchOpen && (
           <div 
-            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-[2px] animate-fade-in"
+            className="fixed inset-0 z-40 bg-black/75 backdrop-blur-[2px] animate-fade-in"
             onClick={() => setIsSearchOpen(false)}
           />
         )}
 
-        {/* Center: Discord / Spotify Integrated Global Search Bar & Inline Results */}
-        <div ref={searchContainerRef} className="relative z-50 flex-1 max-w-2xl mx-3 sm:mx-4">
+        {/* Center: Discord / Spotify Integrated Global Search Bar (Desktop) */}
+        <div ref={searchContainerRef} className="relative z-50 flex-1 max-w-2xl mx-3 sm:mx-4 hidden md:block">
           <form onSubmit={handleSearchSubmit} className="relative flex items-center">
             <div className="absolute left-3 flex items-center pointer-events-none text-[#949ba4]">
               {isSearching ? (
@@ -473,7 +473,7 @@ export default function CommonScreen({
               <button
                 type="submit"
                 disabled={isSearching || !searchQuery.trim()}
-                className="hidden sm:inline-block text-[11px] font-bold text-[#5865f2] hover:text-white hover:bg-[#5865f2] border border-[#5865f2]/40 px-2 py-0.5 rounded transition-all disabled:opacity-30 disabled:pointer-events-none"
+                className="inline-block text-[11px] font-bold text-[#5865f2] hover:text-white hover:bg-[#5865f2] border border-[#5865f2]/40 px-2 py-0.5 rounded transition-all disabled:opacity-30 disabled:pointer-events-none"
               >
                 Go
               </button>
@@ -483,10 +483,10 @@ export default function CommonScreen({
             </div>
           </form>
 
-          {/* Integrated Search Dropdown (Drops directly underneath search bar, elevated above backdrop) */}
+          {/* Desktop Integrated Search Dropdown */}
           {isSearchOpen && (
             <div className="absolute left-0 right-0 top-full mt-2 bg-[#2b2d31] border border-[#4e5058] rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.85)] z-50 overflow-hidden flex flex-col max-h-[75vh] animate-fade-in">
-              {/* Quick Preset Genre Chips (No ugly scrollbars) */}
+              {/* Quick Preset Genre Chips */}
               <div className="px-3 py-2 bg-[#232428] border-b border-[#1f2023] flex items-center gap-1.5 overflow-x-auto no-scrollbar">
                 <span className="text-[10px] uppercase font-bold text-[#80848e] mr-1 flex-shrink-0">
                   Quick Play:
@@ -507,7 +507,7 @@ export default function CommonScreen({
                 ))}
               </div>
 
-              {/* Search Results / Live Catalog Feed */}
+              {/* Search Results */}
               <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5 max-h-[420px]">
                 {isSearching ? (
                   <div className="py-8 flex flex-col items-center justify-center text-[#949ba4] gap-2">
@@ -573,7 +573,6 @@ export default function CommonScreen({
                     </div>
                   ))
                 ) : (
-                  /* Initial Recommendations / Radio stations */
                   <div className="py-2.5 px-2">
                     <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[#949ba4] mb-2 px-1">
                       <span>Featured Radio &amp; Streams</span>
@@ -625,20 +624,31 @@ export default function CommonScreen({
           )}
         </div>
 
-        {/* Right: Key Config, Desktop Collapses, Mobile Chat & Leave */}
-        <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+        {/* Right: Actions on Desktop & Sleek Mobile Actions */}
+        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+          {/* Mobile Search Button (Triggers Mobile Search Modal) */}
+          <button
+            onClick={() => {
+              setIsSearchOpen(true);
+            }}
+            className="p-1.5 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#2b2d31] md:hidden transition-colors active:scale-95"
+            title="Search YouTube"
+          >
+            <Search className="w-5 h-5" />
+          </button>
+
           {/* Mobile Chat / Queue Drawer Button */}
           <button
             onClick={() => {
               setIsRightDrawerOpen(true);
               setIsLeftDrawerOpen(false);
             }}
-            className="relative p-1.5 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#2b2d31] lg:hidden transition-colors"
+            className="relative p-1.5 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#2b2d31] lg:hidden transition-colors active:scale-95"
             title="Open Chat & Queue"
           >
             <MessageSquare className="w-5 h-5" />
             {chatMessages.length > 0 && (
-              <span className="absolute 0 top-1 right-1 w-2 h-2 rounded-full bg-[#5865f2]" />
+              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#5865f2]" />
             )}
           </button>
 
@@ -651,7 +661,7 @@ export default function CommonScreen({
             <PanelRight className="w-4 h-4" />
           </button>
 
-          {/* YouTube API Key indicator */}
+          {/* YouTube API Key indicator (Desktop) */}
           <button
             onClick={onToggleApiKeyGuide}
             className="hidden sm:flex items-center gap-1.5 text-xs text-[#949ba4] hover:text-[#dbdee1] bg-[#2b2d31] hover:bg-[#35373c] px-2.5 py-1 rounded-md transition-colors"
@@ -665,14 +675,160 @@ export default function CommonScreen({
           {/* Leave Voice Room Button */}
           <button
             onClick={() => setShowLeaveModal(true)}
-            className="flex items-center gap-1.5 text-xs text-white bg-[#f23f43] hover:bg-[#da373b] px-2.5 sm:px-3 py-1.5 rounded-lg font-semibold transition-colors shadow-sm cursor-pointer"
+            className="flex items-center gap-1 text-xs text-white bg-[#f23f43] hover:bg-[#da373b] p-1.5 sm:px-3 sm:py-1.5 rounded-lg font-semibold transition-colors shadow-sm cursor-pointer active:scale-95"
             title="Leave / Exit Room"
           >
-            <LogOut className="w-3.5 h-3.5" />
+            <LogOut className="w-4 h-4" />
             <span className="hidden sm:inline">Leave Room</span>
           </button>
         </div>
       </header>
+
+      {/* MOBILE SEARCH MODAL OVERLAY (Smooth Fullscreen Search for Mobile) */}
+      {isSearchOpen && (
+        <div 
+          className="fixed inset-0 z-50 flex items-start justify-center p-3 pt-12 bg-black/85 backdrop-blur-md md:hidden animate-fade-in"
+          onClick={() => setIsSearchOpen(false)}
+        >
+          <div 
+            className="w-full max-w-lg bg-[#2b2d31] border border-[#383a40] rounded-2xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Search Input Bar in Mobile Modal */}
+            <div className="p-3 bg-[#1e1f22] border-b border-[#232428] flex items-center gap-2">
+              <form onSubmit={handleSearchSubmit} className="relative flex-1 flex items-center">
+                <Search className="w-4 h-4 text-[#949ba4] absolute left-3 pointer-events-none" />
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Search YouTube songs, artists, or links..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-[#111214] border border-[#383a40] focus:border-[#5865f2] rounded-xl py-2 pl-9 pr-16 text-xs text-white placeholder-[#80848e] focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={isSearching || !searchQuery.trim()}
+                  className="absolute right-1.5 text-xs font-bold text-white bg-[#5865f2] px-2.5 py-1 rounded-lg disabled:opacity-40"
+                >
+                  Go
+                </button>
+              </form>
+              <button
+                type="button"
+                onClick={() => setIsSearchOpen(false)}
+                className="p-1.5 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#35373c]"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Quick Play Genre Chips */}
+            <div className="px-3 py-2 bg-[#232428] border-b border-[#1f2023] flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-shrink-0">
+              <span className="text-[10px] uppercase font-bold text-[#80848e] mr-1 flex-shrink-0">
+                Quick:
+              </span>
+              {CURATED_TRACKS.map((track) => (
+                <button
+                  key={track.id}
+                  type="button"
+                  onClick={() => {
+                    playVideoImmediately(track);
+                    setIsSearchOpen(false);
+                  }}
+                  className="flex-shrink-0 text-[11px] px-2.5 py-1 rounded-full bg-[#1e1f22] hover:bg-[#5865f2] hover:text-white border border-[#383a40] text-[#dbdee1] transition-colors font-medium flex items-center gap-1 active:scale-95"
+                >
+                  <Sparkles className="w-3 h-3 text-[#f0b232]" />
+                  <span>{track.title.split('-')[0].trim()}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Mobile Results Container */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-2.5 space-y-2">
+              {isSearching ? (
+                <div className="py-10 flex flex-col items-center justify-center text-[#949ba4] gap-2">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#5865f2]" />
+                  <span className="text-xs">Searching YouTube catalog...</span>
+                </div>
+              ) : searchError ? (
+                <div className="p-3 text-xs text-[#f23f43] bg-[#f23f43]/10 border border-[#f23f43]/20 rounded-lg">
+                  {searchError}
+                </div>
+              ) : searchResults.length > 0 ? (
+                searchResults.map((video) => (
+                  <div
+                    key={video.id}
+                    className="flex items-center justify-between gap-2.5 p-2 rounded-xl bg-[#1e1f22] border border-[#383a40] shadow-sm"
+                  >
+                    <img
+                      src={video.thumbnail}
+                      alt={video.title}
+                      className="w-16 h-11 rounded-lg object-cover flex-shrink-0 bg-black"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-xs font-semibold text-white truncate">
+                        {video.title}
+                      </h4>
+                      <p className="text-[10px] text-[#949ba4] truncate">{video.channelTitle}</p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          playVideoImmediately(video);
+                          setIsSearchOpen(false);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-[#5865f2] text-white text-xs font-bold active:scale-95"
+                      >
+                        Play
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          addTrackToQueue(video);
+                        }}
+                        className="p-1.5 rounded-lg bg-[#383a40] text-white text-xs active:scale-95"
+                        title="Add to queue"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="py-2">
+                  <span className="text-[10px] uppercase font-bold text-[#949ba4] mb-2 block">
+                    Featured Radio Stations:
+                  </span>
+                  <div className="space-y-1.5">
+                    {CURATED_TRACKS.map((track) => (
+                      <div
+                        key={track.id}
+                        onClick={() => {
+                          playVideoImmediately(track);
+                          setIsSearchOpen(false);
+                        }}
+                        className="flex items-center gap-2.5 p-2 rounded-xl bg-[#1e1f22] hover:bg-[#35373c] border border-[#383a40] cursor-pointer"
+                      >
+                        <img
+                          src={track.thumbnail}
+                          alt={track.title}
+                          className="w-12 h-9 rounded object-cover flex-shrink-0 bg-black"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-medium text-white truncate">{track.title}</p>
+                          <span className="text-[10px] text-[#949ba4] block truncate">{track.channelTitle}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 2. DISCORD 3-COLUMN MAIN BODY */}
       <div className="flex-1 flex overflow-hidden relative">
@@ -1011,10 +1167,10 @@ export default function CommonScreen({
 
           {/* MAIN VIDEO PLAYER / STREAM STAGE */}
           {callLayoutMode !== 'grid' && (
-            <div className="flex-1 relative bg-[#111214] flex items-center justify-center overflow-hidden p-2 md:p-3">
+            <div className="flex-1 min-h-0 relative bg-[#111214] flex items-center justify-center overflow-hidden p-1.5 sm:p-3">
             
             {/* 16:9 Stream Container */}
-            <div className="relative w-full h-full max-w-[1280px] max-h-[720px] aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-[#383a40]">
+            <div className="relative w-full max-w-[1280px] max-h-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-[#383a40] flex items-center justify-center">
               
               {currentTrack ? (
                 <YouTubePlayer
@@ -1031,25 +1187,25 @@ export default function CommonScreen({
                 />
               ) : (
                 /* Empty Stream Stage Placeholder */
-                <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-[#1e1f22] text-[#dbdee1]">
-                  <div className="w-16 h-16 rounded-3xl bg-[#5865f2]/20 border border-[#5865f2]/40 flex items-center justify-center text-[#5865f2] mb-3 shadow-lg animate-bounce">
-                    <Music className="w-8 h-8" />
+                <div className="w-full h-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#1e1f22] text-[#dbdee1]">
+                  <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-2xl sm:rounded-3xl bg-[#5865f2]/20 border border-[#5865f2]/40 flex items-center justify-center text-[#5865f2] mb-2 sm:mb-3 shadow-lg">
+                    <Music className="w-6 h-6 sm:w-8 sm:h-8" />
                   </div>
-                  <h4 className="text-lg font-bold text-white mb-1">
+                  <h4 className="text-sm sm:text-lg font-bold text-white mb-1">
                     Ready to stream together
                   </h4>
-                  <p className="text-xs text-[#949ba4] max-w-sm mb-4 leading-relaxed">
-                    Search for any song above or click a curated radio station below to start streaming in real-time for everyone in the room!
+                  <p className="text-[11px] sm:text-xs text-[#949ba4] max-w-sm mb-3 sm:mb-4 leading-relaxed hidden xs:block">
+                    Search for any song above or click a curated radio station below to start streaming in real-time!
                   </p>
 
-                  <div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
+                  <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 max-w-md">
                     {CURATED_TRACKS.slice(0, 4).map((track) => (
                       <button
                         key={track.id}
                         onClick={() => playVideoImmediately(track)}
-                        className="text-xs bg-[#2b2d31] hover:bg-[#5865f2] hover:text-white border border-[#383a40] px-3 py-1.5 rounded-lg text-[#dbdee1] font-medium transition-all shadow-sm flex items-center gap-1.5"
+                        className="text-[11px] sm:text-xs bg-[#2b2d31] hover:bg-[#5865f2] hover:text-white border border-[#383a40] px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[#dbdee1] font-medium transition-all shadow-sm flex items-center gap-1.5 active:scale-95"
                       >
-                        <Sparkles className="w-3.5 h-3.5 text-[#f0b232]" />
+                        <Sparkles className="w-3 h-3 text-[#f0b232]" />
                         <span>{track.title.split('-')[0].trim()}</span>
                       </button>
                     ))}
@@ -1065,11 +1221,11 @@ export default function CommonScreen({
                     className="absolute bottom-6 animate-float-reaction flex flex-col items-center pointer-events-none"
                     style={{ left: `${reaction.left}%` }}
                   >
-                    <span className="text-4xl drop-shadow-lg filter select-none">
+                    <span className="text-3xl sm:text-4xl drop-shadow-lg filter select-none">
                       {reaction.emoji}
                     </span>
                     {reaction.sender && (
-                      <span className="text-[10px] bg-black/70 text-white px-1.5 py-0.2 rounded-full font-bold shadow-md mt-1">
+                      <span className="text-[9px] sm:text-[10px] bg-black/70 text-white px-1.5 py-0.2 rounded-full font-bold shadow-md mt-1">
                         {reaction.sender}
                       </span>
                     )}
@@ -1082,11 +1238,11 @@ export default function CommonScreen({
           )}
 
           {/* STREAM BOTTOM CONTROLS BAR */}
-          <div className="bg-[#2b2d31] border-t border-[#232428] px-4 py-2.5 flex flex-col gap-2 flex-shrink-0">
+          <div className="bg-[#2b2d31] border-t border-[#232428] px-3 sm:px-4 py-2 sm:py-2.5 flex flex-col gap-1.5 sm:gap-2 flex-shrink-0">
             
             {/* Timeline Scrubber */}
-            <div className="flex items-center gap-3">
-              <span className="text-[11px] font-mono font-semibold text-[#949ba4] w-12 text-right">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <span className="text-[10px] sm:text-[11px] font-mono font-semibold text-[#949ba4] w-10 sm:w-12 text-right">
                 {formatTime(activeTime)}
               </span>
 
@@ -1104,19 +1260,19 @@ export default function CommonScreen({
                 />
               </div>
 
-              <span className="text-[11px] font-mono font-semibold text-[#949ba4] w-12">
+              <span className="text-[10px] sm:text-[11px] font-mono font-semibold text-[#949ba4] w-10 sm:w-12">
                 {formatTime(duration)}
               </span>
             </div>
 
             {/* Buttons Row */}
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               
               {/* Play/Pause, Skip, Volume */}
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                 <button
                   onClick={handlePlayPause}
-                  className="w-9 h-9 rounded-full bg-[#5865f2] hover:bg-[#4752c4] text-white flex items-center justify-center shadow-md transition-transform active:scale-95"
+                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#5865f2] hover:bg-[#4752c4] text-white flex items-center justify-center shadow-md transition-transform active:scale-95"
                   title={isPlaying ? 'Pause stream' : 'Play stream'}
                 >
                   {isPlaying ? (
@@ -1128,16 +1284,15 @@ export default function CommonScreen({
 
                 <button
                   onClick={handleSkipTrack}
-                  className="p-2 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#35373c] transition-colors"
+                  className="p-1.5 sm:p-2 rounded-lg text-[#949ba4] hover:text-white hover:bg-[#35373c] transition-colors"
                   title="Skip to next queued song"
                 >
                   <SkipForward className="w-4 h-4" />
                 </button>
 
-                <div className="h-4 w-[1px] bg-[#383a40]" />
-
-                {/* Volume Slider */}
-                <div className="flex items-center gap-2">
+                {/* Volume Slider (Hidden on mobile, uses hardware volume) */}
+                <div className="hidden sm:flex items-center gap-2">
+                  <div className="h-4 w-[1px] bg-[#383a40]" />
                   <button
                     onClick={() => setIsMuted(!isMuted)}
                     className="p-1.5 text-[#949ba4] hover:text-white transition-colors"
@@ -1163,8 +1318,8 @@ export default function CommonScreen({
                 </div>
               </div>
 
-              {/* Quick Reactions Bar */}
-              <div className="flex items-center gap-1 bg-[#1e1f22] border border-[#383a40] px-2 py-1 rounded-full shadow-inner">
+              {/* Quick Reactions Bar (Horizontal scroll with no-scrollbar on mobile) */}
+              <div className="flex items-center gap-0.5 sm:gap-1 bg-[#1e1f22] border border-[#383a40] px-1.5 sm:px-2 py-0.5 rounded-full shadow-inner overflow-x-auto no-scrollbar max-w-[180px] xs:max-w-[240px] sm:max-w-none">
                 <span className="text-[10px] text-[#949ba4] font-bold uppercase tracking-wider mr-1 hidden sm:inline">
                   React:
                 </span>
@@ -1172,7 +1327,7 @@ export default function CommonScreen({
                   <button
                     key={emoji}
                     onClick={() => handleSendReaction(emoji)}
-                    className="w-7 h-7 flex items-center justify-center hover:bg-[#35373c] rounded-full text-base transition-transform hover:scale-125 active:scale-95"
+                    className="w-6 h-6 sm:w-7 sm:h-7 flex items-center justify-center hover:bg-[#35373c] rounded-full text-sm sm:text-base transition-transform hover:scale-125 active:scale-95 flex-shrink-0"
                     title={`Send ${emoji} to stream`}
                   >
                     {emoji}
@@ -1407,19 +1562,19 @@ export default function CommonScreen({
 
       </div>
 
-      {/* 3. DISCORD MOBILE BOTTOM NAVIGATION DOCK (Sliders / Drawers Quick-actions) */}
-      <nav className="h-13 bg-[#1e1f22] border-t border-[#232428] px-2 flex items-center justify-around lg:hidden flex-shrink-0 z-30">
+      {/* 3. DISCORD MOBILE BOTTOM NAVIGATION DOCK (Sticky, Non-Scrollable) */}
+      <nav className="h-14 bg-[#1e1f22] border-t border-[#232428] px-2 flex items-center justify-around lg:hidden flex-shrink-0 z-30 pb-[env(safe-area-inset-bottom,0px)]">
         <button
           onClick={() => {
             setIsLeftDrawerOpen(false);
             setIsRightDrawerOpen(false);
           }}
-          className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
-            !isLeftDrawerOpen && !isRightDrawerOpen ? 'text-[#5865f2]' : 'text-[#949ba4] hover:text-[#dbdee1]'
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-3 rounded-xl text-xs font-semibold transition-all active:scale-95 min-w-[56px] min-h-[44px] ${
+            !isLeftDrawerOpen && !isRightDrawerOpen ? 'text-[#5865f2] bg-[#5865f2]/10' : 'text-[#949ba4] hover:text-[#dbdee1]'
           }`}
         >
           <Tv className="w-4 h-4" />
-          <span className="text-[10px]">Stage</span>
+          <span className="text-[10px] font-medium">Stage</span>
         </button>
 
         <button
@@ -1428,14 +1583,14 @@ export default function CommonScreen({
             setIsRightDrawerOpen(true);
             setIsLeftDrawerOpen(false);
           }}
-          className={`relative flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
-            isRightDrawerOpen && rightTab === 'chat' ? 'text-[#5865f2]' : 'text-[#949ba4] hover:text-[#dbdee1]'
+          className={`relative flex flex-col items-center justify-center gap-0.5 py-1 px-3 rounded-xl text-xs font-semibold transition-all active:scale-95 min-w-[56px] min-h-[44px] ${
+            isRightDrawerOpen && rightTab === 'chat' ? 'text-[#5865f2] bg-[#5865f2]/10' : 'text-[#949ba4] hover:text-[#dbdee1]'
           }`}
         >
           <MessageSquare className="w-4 h-4" />
-          <span className="text-[10px]">Chat</span>
+          <span className="text-[10px] font-medium">Chat</span>
           {chatMessages.length > 0 && (
-            <span className="absolute top-1 right-2.5 w-2 h-2 rounded-full bg-[#5865f2]" />
+            <span className="absolute top-1.5 right-3 w-2 h-2 rounded-full bg-[#5865f2]" />
           )}
         </button>
 
@@ -1445,14 +1600,14 @@ export default function CommonScreen({
             setIsRightDrawerOpen(true);
             setIsLeftDrawerOpen(false);
           }}
-          className={`relative flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
-            isRightDrawerOpen && rightTab === 'queue' ? 'text-[#5865f2]' : 'text-[#949ba4] hover:text-[#dbdee1]'
+          className={`relative flex flex-col items-center justify-center gap-0.5 py-1 px-3 rounded-xl text-xs font-semibold transition-all active:scale-95 min-w-[56px] min-h-[44px] ${
+            isRightDrawerOpen && rightTab === 'queue' ? 'text-[#5865f2] bg-[#5865f2]/10' : 'text-[#949ba4] hover:text-[#dbdee1]'
           }`}
         >
           <ListMusic className="w-4 h-4" />
-          <span className="text-[10px]">Queue</span>
+          <span className="text-[10px] font-medium">Queue</span>
           {queue.length > 0 && (
-            <span className="absolute top-0.5 right-1.5 text-[9px] bg-[#5865f2] text-white px-1 rounded-full font-mono font-bold">
+            <span className="absolute top-1 right-2 text-[9px] bg-[#5865f2] text-white px-1 rounded-full font-mono font-bold leading-tight">
               {queue.length}
             </span>
           )}
@@ -1463,23 +1618,27 @@ export default function CommonScreen({
             setIsLeftDrawerOpen(true);
             setIsRightDrawerOpen(false);
           }}
-          className={`relative flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
-            isLeftDrawerOpen ? 'text-[#5865f2]' : 'text-[#949ba4] hover:text-[#dbdee1]'
+          className={`relative flex flex-col items-center justify-center gap-0.5 py-1 px-3 rounded-xl text-xs font-semibold transition-all active:scale-95 min-w-[56px] min-h-[44px] ${
+            isLeftDrawerOpen ? 'text-[#5865f2] bg-[#5865f2]/10' : 'text-[#949ba4] hover:text-[#dbdee1]'
           }`}
         >
           <Users className="w-4 h-4" />
-          <span className="text-[10px]">Members ({members.length})</span>
+          <span className="text-[10px] font-medium">Members</span>
+          {members.length > 0 && (
+            <span className="absolute top-1 right-1.5 text-[9px] bg-[#23a55a] text-white px-1 rounded-full font-mono font-bold leading-tight">
+              {members.length}
+            </span>
+          )}
         </button>
 
         <button
           onClick={() => {
             setIsSearchOpen(true);
-            setTimeout(() => searchInputRef.current?.focus(), 50);
           }}
-          className="flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg text-xs font-semibold text-[#949ba4] hover:text-[#dbdee1] transition-colors"
+          className="flex flex-col items-center justify-center gap-0.5 py-1 px-3 rounded-xl text-xs font-semibold text-[#949ba4] hover:text-[#dbdee1] transition-all active:scale-95 min-w-[56px] min-h-[44px]"
         >
           <Search className="w-4 h-4" />
-          <span className="text-[10px]">Search</span>
+          <span className="text-[10px] font-medium">Search</span>
         </button>
       </nav>
 

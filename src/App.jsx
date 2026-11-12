@@ -303,7 +303,7 @@ export default function App() {
   const isHost = Boolean(currentUser?.isHost);
 
   return (
-    <div className="h-screen w-screen bg-[#1e1f22] text-[#dbdee1] flex flex-col antialiased overflow-hidden select-none">
+    <div className="fixed inset-0 h-full h-[100dvh] w-full bg-[#1e1f22] text-[#dbdee1] flex flex-col antialiased overflow-hidden overscroll-none select-none">
       {/* Toast Alert */}
       {toast && (
         <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 animate-fade-in pointer-events-none">

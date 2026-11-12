@@ -40,37 +40,6 @@ export default function JoinCreateModal({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
   const [waitingStatus, setWaitingStatus] = useState(false);
-  const [isConnected, setIsConnected] = useState(socket.connected);
-  const [showServerConfig, setShowServerConfig] = useState(false);
-  const [serverUrlInput, setServerUrlInput] = useState(() => localStorage.getItem('afterspot_backend_url') || '');
-
-  useEffect(() => {
-    const handleConnect = () => setIsConnected(true);
-    const handleDisconnect = () => setIsConnected(false);
-
-    socket.on('connect', handleConnect);
-    socket.on('disconnect', handleDisconnect);
-
-    const timer = setTimeout(() => {
-      setIsConnected(socket.connected);
-    }, 2000);
-
-    return () => {
-      socket.off('connect', handleConnect);
-      socket.off('disconnect', handleDisconnect);
-      clearTimeout(timer);
-    };
-  }, []);
-
-  const handleSaveServerUrl = (e) => {
-    e?.preventDefault();
-    if (serverUrlInput.trim()) {
-      localStorage.setItem('afterspot_backend_url', serverUrlInput.trim());
-    } else {
-      localStorage.removeItem('afterspot_backend_url');
-    }
-    window.location.reload();
-  };
 
   useEffect(() => {
     if (initialRoomId) {
@@ -229,51 +198,6 @@ export default function JoinCreateModal({
                 Join Room
               </button>
             </div>
-
-            {/* Live Backend Connection Warning & URL Config */}
-            {!isConnected && (
-              <div className="mb-4 p-3 rounded-2xl bg-[#1e1f22] border border-[#f0b232]/40 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-[#f0b232] flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    Live Backend Not Connected
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setShowServerConfig(!showServerConfig)}
-                    className="text-[11px] text-[#5865f2] hover:text-white font-semibold underline"
-                  >
-                    {showServerConfig ? 'Hide' : 'Link Backend URL'}
-                  </button>
-                </div>
-                <p className="text-[11px] text-[#949ba4] mt-1 leading-relaxed">
-                  Vercel hosts the frontend. Real-time rooms and video calling require your Node backend (Render, Railway, etc.).
-                </p>
-
-                {showServerConfig && (
-                  <form onSubmit={handleSaveServerUrl} className="mt-2.5 pt-2.5 border-t border-[#383a40] space-y-2">
-                    <label className="text-[10px] uppercase font-bold text-[#949ba4] block">
-                      Backend Server URL (e.g. Render or Railway):
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="url"
-                        placeholder="https://your-backend.onrender.com"
-                        value={serverUrlInput}
-                        onChange={(e) => setServerUrlInput(e.target.value)}
-                        className="flex-1 bg-[#111214] border border-[#383a40] rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-[#80848e] focus:outline-none focus:border-[#5865f2]"
-                      />
-                      <button
-                        type="submit"
-                        className="px-3 py-1.5 bg-[#5865f2] hover:bg-[#4752c4] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
-                      >
-                        Connect
-                      </button>
-                    </div>
-                  </form>
-                )}
-              </div>
-            )}
 
             {errorMessage && (
               <div className="mb-4 p-3 rounded-xl bg-[#f23f43]/15 border border-[#f23f43]/30 text-xs text-[#f23f43] flex items-center gap-2">

@@ -1,13 +1,9 @@
 import { io } from 'socket.io-client';
 
-// Determine backend URL
+// Determine backend URL from .env (VITE_BACKEND_URL) or default localhost:3001
 export function getBackendUrl() {
   if (import.meta.env.VITE_BACKEND_URL) {
     return import.meta.env.VITE_BACKEND_URL.replace(/\/$/, '');
-  }
-  const custom = localStorage.getItem('afterspot_backend_url');
-  if (custom) {
-    return custom.replace(/\/$/, '');
   }
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return 'http://localhost:3001';

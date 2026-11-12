@@ -1,0 +1,350 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Radio, 
+  Users, 
+  ArrowRight, 
+  Loader2, 
+  AlertCircle, 
+  Clock, 
+  CheckCircle2,
+  Shield
+} from 'lucide-react';
+import socket from '../services/socket';
+
+function getSessionId() {
+  let sid = localStorage.getItem('togetherTune_sessionId');
+  if (!sid) {
+    sid = `sess-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    localStorage.setItem('togetherTune_sessionId', sid);
+  }
+  return sid;
+}
+
+export default function JoinCreateModal({
+  onRoomJoined,
+  initialRoomId = ''
+}) {
+  const [mode, setMode] = useState(initialRoomId ? 'join' : 'create'); // 'create' | 'join'
+  
+  // Create Room fields
+  const [createRoomName, setCreateRoomName] = useState('');
+  const [createUserName, setCreateUserName] = useState('');
+  const [createRoomId, setCreateRoomId] = useState('');
+  const [createPassword, setCreatePassword] = useState('');
+
+  // Join Room fields
+  const [joinRoomId, setJoinRoomId] = useState(initialRoomId);
+  const [joinUserName, setJoinUserName] = useState('');
+  const [joinPassword, setJoinPassword] = useState('');
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
+  const [waitingStatus, setWaitingStatus] = useState(false);
+
+  useEffect(() => {
+    if (initialRoomId) {
+      setJoinRoomId(initialRoomId.toUpperCase());
+      setMode('join');
+    }
+  }, [initialRoomId]);
+
+  // Listen for host admission approval while in the waiting room
+  useEffect(() => {
+    const handleApproved = ({ room, user }) => {
+      setWaitingStatus(false);
+      onRoomJoined(room, user);
+    };
+
+    const handleRejected = ({ message }) => {
+      setWaitingStatus(false);
+      setIsLoading(false);
+      setErrorMessage(message || 'The host declined your join request.');
+    };
+
+    socket.on('room:approved', handleApproved);
+    socket.on('room:rejected', handleRejected);
+
+    return () => {
+      socket.off('room:approved', handleApproved);
+      socket.off('room:rejected', handleRejected);
+    };
+  }, [onRoomJoined]);
+
+  const handleCreateRoom = (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setErrorMessage(null);
+
+    const generatedId = createRoomId.trim() || Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    const sessionId = getSessionId();
+
+    socket.emit('room:create', {
+      roomId: generatedId,
+      roomName: createRoomName.trim() || 'TogetherTune Stage',
+      password: createPassword.trim(),
+      userName: createUserName.trim() || 'Host',
+      sessionId,
+      requireApproval: true
+    }, (response) => {
+      setIsLoading(false);
+      if (response.success) {
+        onRoomJoined(response.room, response.user);
+      } else {
+        setErrorMessage(response.message || 'Failed to create room.');
+      }
+    });
+  };
+
+  const handleJoinRoom = (e) => {
+    e.preventDefault();
+    if (!joinRoomId.trim()) {
+      setErrorMessage('Please enter a Room ID.');
+      return;
+    }
+
+    setIsLoading(true);
+    setErrorMessage(null);
+
+    const sessionId = getSessionId();
+
+    socket.emit('room:join', {
+      roomId: joinRoomId.trim(),
+      password: joinPassword.trim(),
+      userName: joinUserName.trim() || 'Guest',
+      sessionId
+    }, (response) => {
+      if (response.success) {
+        if (response.waiting) {
+          setWaitingStatus(true);
+          setIsLoading(false);
+        } else {
+          setIsLoading(false);
+          onRoomJoined(response.room, response.user);
+        }
+      } else {
+        setIsLoading(false);
+        setErrorMessage(response.message || 'Failed to join room.');
+      }
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-fade-in">
+      <div className="relative w-full max-w-md bg-[#313338] border border-[#383a40] rounded-3xl shadow-2xl p-6 md:p-8 text-[#dbdee1]">
+        
+        {/* Brand Header */}
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-3xl bg-[#5865f2] text-white shadow-lg mb-3">
+            <Radio className="w-7 h-7" />
+          </div>
+          <h1 className="text-2xl font-bold text-white tracking-tight">
+            Together<span className="text-[#5865f2]">Tune</span>
+          </h1>
+          <p className="text-xs text-[#949ba4] mt-1">
+            Discord-Style Shared Watch &amp; Listening Stage
+          </p>
+        </div>
+
+        {/* WAITING ROOM SCREEN */}
+        {waitingStatus ? (
+          <div className="text-center py-6 space-y-4 animate-fade-in">
+            <div className="w-16 h-16 rounded-full bg-[#f0b232]/20 border border-[#f0b232]/40 mx-auto flex items-center justify-center text-[#f0b232] animate-pulse">
+              <Clock className="w-8 h-8" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white">You're in the Waiting Room</h3>
+              <p className="text-xs text-[#949ba4] mt-1 max-w-xs mx-auto leading-relaxed">
+                We've notified the room host. Your screen will open automatically as soon as you're admitted.
+              </p>
+            </div>
+            <div className="pt-2">
+              <button
+                onClick={() => setWaitingStatus(false)}
+                className="text-xs text-[#949ba4] hover:text-white font-semibold underline underline-offset-2"
+              >
+                Cancel and return
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Mode Tabs */}
+            <div className="grid grid-cols-2 p-1 bg-[#1e1f22] border border-[#383a40] rounded-xl mb-6">
+              <button
+                onClick={() => { setMode('create'); setErrorMessage(null); }}
+                className={`py-2 text-xs font-bold rounded-lg transition-all ${
+                  mode === 'create'
+                    ? 'bg-[#5865f2] text-white shadow-sm'
+                    : 'text-[#949ba4] hover:text-white'
+                }`}
+              >
+                Create Room
+              </button>
+              <button
+                onClick={() => { setMode('join'); setErrorMessage(null); }}
+                className={`py-2 text-xs font-bold rounded-lg transition-all ${
+                  mode === 'join'
+                    ? 'bg-[#5865f2] text-white shadow-sm'
+                    : 'text-[#949ba4] hover:text-white'
+                }`}
+              >
+                Join Room
+              </button>
+            </div>
+
+            {errorMessage && (
+              <div className="mb-4 p-3 rounded-xl bg-[#f23f43]/15 border border-[#f23f43]/30 text-xs text-[#f23f43] flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{errorMessage}</span>
+              </div>
+            )}
+
+            {/* CREATE FORM */}
+            {mode === 'create' && (
+              <form onSubmit={handleCreateRoom} className="space-y-3.5">
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1">
+                    Room / Stage Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Study &amp; Chill, Anime Lounge, DJ Beats"
+                    value={createRoomName}
+                    onChange={(e) => setCreateRoomName(e.target.value)}
+                    className="w-full bg-[#1e1f22] border border-[#383a40] rounded-xl px-4 py-2.5 text-xs text-white placeholder-[#80848e] focus:outline-none focus:border-[#5865f2]"
+                  />
+                  <p className="text-[10px] text-[#949ba4] mt-1">
+                    The name of the room (independent from your user nickname).
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1">
+                    Your Personal Username / Nickname
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Alex, Sam, DJ Panda"
+                    value={createUserName}
+                    onChange={(e) => setCreateUserName(e.target.value)}
+                    className="w-full bg-[#1e1f22] border border-[#383a40] rounded-xl px-4 py-2.5 text-xs text-white placeholder-[#80848e] focus:outline-none focus:border-[#5865f2]"
+                  />
+                  <p className="text-[10px] text-[#949ba4] mt-1">
+                    Your personal display name visible in video calls, voice, and chat.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-xs font-bold text-white block mb-1">
+                      Room ID (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. ROOM99"
+                      value={createRoomId}
+                      onChange={(e) => setCreateRoomId(e.target.value.toUpperCase())}
+                      className="w-full bg-[#1e1f22] border border-[#383a40] rounded-xl px-4 py-2.5 text-xs text-white uppercase font-mono placeholder-[#949ba4] focus:outline-none focus:border-[#5865f2]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-white block mb-1">
+                      Password (Optional)
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="Passcode"
+                      value={createPassword}
+                      onChange={(e) => setCreatePassword(e.target.value)}
+                      className="w-full bg-[#1e1f22] border border-[#383a40] rounded-xl px-4 py-2.5 text-xs text-white placeholder-[#949ba4] focus:outline-none focus:border-[#5865f2]"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading || !createUserName.trim()}
+                  className="w-full mt-3 py-3 rounded-xl bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-50 text-white text-xs font-bold shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <span>Create Stage &amp; Enter</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
+
+            {/* JOIN FORM */}
+            {mode === 'join' && (
+              <form onSubmit={handleJoinRoom} className="space-y-3.5">
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1">
+                    Room ID
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. ROOM99"
+                    value={joinRoomId}
+                    onChange={(e) => setJoinRoomId(e.target.value.toUpperCase())}
+                    className="w-full bg-[#1e1f22] border border-[#383a40] rounded-xl px-4 py-2.5 text-xs text-white uppercase font-mono font-bold placeholder-[#949ba4] focus:outline-none focus:border-[#5865f2]"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1">
+                    Your Nickname
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Sam"
+                    value={joinUserName}
+                    onChange={(e) => setJoinUserName(e.target.value)}
+                    className="w-full bg-[#1e1f22] border border-[#383a40] rounded-xl px-4 py-2.5 text-xs text-white placeholder-[#949ba4] focus:outline-none focus:border-[#5865f2]"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1">
+                    Room Password (If required)
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Room passcode"
+                    value={joinPassword}
+                    onChange={(e) => setJoinPassword(e.target.value)}
+                    className="w-full bg-[#1e1f22] border border-[#383a40] rounded-xl px-4 py-2.5 text-xs text-white placeholder-[#949ba4] focus:outline-none focus:border-[#5865f2]"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading || !joinRoomId.trim() || !joinUserName.trim()}
+                  className="w-full mt-3 py-3 rounded-xl bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-50 text-white text-xs font-bold shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <span>Join Discord Stage</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

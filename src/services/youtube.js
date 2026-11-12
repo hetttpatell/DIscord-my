@@ -1,4 +1,5 @@
 // Helper functions for YouTube integration and default curated tracks
+import { getBackendUrl } from './socket';
 
 export const CURATED_TRACKS = [
   {
@@ -139,7 +140,8 @@ export async function searchYouTube(query, apiKey) {
       params.append('key', cleanKey);
     }
 
-    const response = await fetch(`/api/youtube/search?${params.toString()}`);
+    const backendUrl = getBackendUrl();
+    const response = await fetch(`${backendUrl}/api/youtube/search?${params.toString()}`);
     const data = await response.json();
 
     if (response.ok && data.items && data.items.length > 0) {

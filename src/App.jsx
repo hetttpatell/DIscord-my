@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Navbar from './components/Navbar';
 import CommonScreen from './components/CommonScreen';
 import JoinCreateModal from './components/JoinCreateModal';
-import socket from './services/socket';
+import socket, { getBackendUrl } from './services/socket';
 import { Radio } from 'lucide-react';
 
 function getSessionId() {
@@ -84,7 +84,7 @@ export default function App() {
     }
 
     // Check if backend already has an API key
-    fetch('/api/health')
+    fetch(`${getBackendUrl()}/api/health`)
       .then(r => r.json())
       .then(data => {
         if (data.hasApiKey && !apiKey) {

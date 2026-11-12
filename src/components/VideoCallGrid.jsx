@@ -30,7 +30,8 @@ export default function VideoCallGrid({
   members = [],
   layoutMode = 'strip', // 'strip' (above video player) | 'grid' (Google Meet full grid)
   onToggleLayoutMode,
-  onLeaveRoom
+  onLeaveRoom,
+  children
 }) {
   const [isInCall, setIsInCall] = useState(true); // Always in call by default
   const [isMicOn, setIsMicOn] = useState(true);   // Mic on by default
@@ -219,6 +220,16 @@ export default function VideoCallGrid({
   useEffect(() => {
     if (!isInCall) return;
 
+    // Existing peers already in the room when we joined
+    const handleExistingPeers = ({ peers: existingPeersList }) => {
+      if (!Array.isArray(existingPeersList)) return;
+      existingPeersList.forEach(peer => {
+        if (peer.peerId && peer.peerId !== socket.id) {
+          createPeerConnection(peer.peerId, peer.userName, peer.avatarColor, true);
+        }
+      });
+    };
+
     // Another peer joined the call -> initiator sends offer
     const handlePeerJoined = ({ peerId, userName, avatarColor }) => {
       if (peerId === socket.id) return;
@@ -287,6 +298,7 @@ export default function VideoCallGrid({
       });
     };
 
+    socket.on('webrtc:existing-peers', handleExistingPeers);
     socket.on('webrtc:peer-joined', handlePeerJoined);
     socket.on('webrtc:signal', handleSignal);
     socket.on('webrtc:media-state-updated', handleMediaStateUpdated);
@@ -296,6 +308,7 @@ export default function VideoCallGrid({
     socket.emit('webrtc:join-call');
 
     return () => {
+      socket.off('webrtc:existing-peers', handleExistingPeers);
       socket.off('webrtc:peer-joined', handlePeerJoined);
       socket.off('webrtc:signal', handleSignal);
       socket.off('webrtc:media-state-updated', handleMediaStateUpdated);
@@ -491,17 +504,36 @@ export default function VideoCallGrid({
     }
   };
 
-  // Count active video tiles & check if any video is streaming
-  const peerList = Object.entries(peers);
-  const totalCallCount = peerList.length + 1;
-  const hasActiveVideo = isCameraOn || isScreenSharing || peerList.some(([_, p]) => !p.isCameraOff && p.stream?.getVideoTracks().length > 0);
+  // Derive full participants list from room members (so all room members always appear in Meet grid)
+  const currentUserId = currentUser?.id || socket.id;
+  const remoteMemberList = (members || []).filter(m => 
+    m.id !== currentUserId && 
+    m.id !== socket.id &&
+    (!currentUser?.sessionId || m.sessionId !== currentUser.sessionId)
+  );
+
+  // Merge any WebRTC peers that might not yet be in members array
+  const remotePeerIds = new Set(remoteMemberList.map(m => m.id));
+  const extraPeers = Object.entries(peers)
+    .filter(([peerId]) => !remotePeerIds.has(peerId) && peerId !== socket.id)
+    .map(([peerId, data]) => ({
+      id: peerId,
+      name: data.userName || 'Member',
+      avatarColor: data.avatarColor || '#5865f2',
+      isMuted: data.isMuted,
+      isCameraOff: data.isCameraOff
+    }));
+
+  const allRemoteParticipants = [...remoteMemberList, ...extraPeers];
+  const totalCallCount = allRemoteParticipants.length + 1;
+  const hasActiveVideo = isCameraOn || isScreenSharing || Object.values(peers).some(p => !p.isCameraOff && p.stream?.getVideoTracks().length > 0);
 
   return (
     <div className="w-full flex flex-col transition-all flex-shrink-0 z-20">
       
       {/* Permanent hidden audio elements for remote peers: guarantees uninterrupted mobile voice lounge */}
       <div className="hidden" aria-hidden="true">
-        {peerList.map(([peerId, peerData]) => (
+        {Object.entries(peers).map(([peerId, peerData]) => (
           <audio
             key={`audio-${peerId}`}
             ref={(el) => {
@@ -553,19 +585,23 @@ export default function VideoCallGrid({
               )}
             </div>
 
-            {/* Remote peers' avatars */}
-            {peerList.map(([peerId, peerData]) => (
-              <div 
-                key={peerId}
-                className={`relative w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow ring-2 flex-shrink-0 transition-all ${
-                  peerData.isMuted ? 'ring-[#5f6368]' : 'ring-[#34a853]'
-                }`}
-                style={{ backgroundColor: peerData.avatarColor || '#5865f2' }}
-                title={`${peerData.userName || 'Member'} (${peerData.isMuted ? 'Muted' : 'Speaking'})`}
-              >
-                {peerData.userName?.charAt(0).toUpperCase() || 'P'}
-              </div>
-            ))}
+            {/* Remote members' avatars */}
+            {allRemoteParticipants.map((member) => {
+              const peerData = peers[member.id] || {};
+              const isMuted = peerData.isMuted ?? member.isMuted ?? false;
+              return (
+                <div 
+                  key={member.id}
+                  className={`relative w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow ring-2 flex-shrink-0 transition-all ${
+                    isMuted ? 'ring-[#ea4335]' : 'ring-[#34a853]'
+                  }`}
+                  style={{ backgroundColor: member.avatarColor || '#5865f2' }}
+                  title={`${member.name || 'Member'} (${isMuted ? 'Muted' : 'Speaking'})`}
+                >
+                  {member.name?.charAt(0).toUpperCase() || 'P'}
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -642,75 +678,156 @@ export default function VideoCallGrid({
 
       </div>
 
-      {/* 2. VIDEO TILES CONTAINER (Appears when camera is active or in Meet Grid mode) */}
-      {(hasActiveVideo || layoutMode === 'grid') && (
-        <div 
-          className={`w-full bg-[#111214] p-2 transition-all ${
-            layoutMode === 'grid' 
-              ? 'flex-1 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 overflow-y-auto max-h-[75vh]' 
-              : 'flex items-center gap-2 overflow-x-auto border-b border-[#2b2d31] no-scrollbar max-h-28'
-          }`}
-        >
-          {/* USER'S OWN VIDEO TILE */}
-          <div 
-            className={`relative rounded-xl overflow-hidden bg-[#202124] border-2 border-[#3c4043] flex items-center justify-center shadow-lg transition-all ${
-              layoutMode === 'grid' 
-                ? 'w-full aspect-video min-h-[160px] sm:min-h-[180px]' 
-                : 'w-32 h-20 sm:w-44 sm:h-28 flex-shrink-0'
-            }`}
-          >
-            {isCameraOn || isScreenSharing ? (
-              <video
-                ref={localVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center text-center p-3">
-                <div 
-                  className="w-12 h-12 rounded-full flex items-center justify-center text-base font-bold text-white shadow-md mb-1 ring-2 ring-[#5f6368]"
-                  style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
-                >
-                  {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
-                </div>
-                <span className="text-[10px] text-[#9aa0a6]">Camera Off</span>
-              </div>
-            )}
+      {/* 2. MAIN CONTENT: THEATER VIEW vs GOOGLE MEET VIEW */}
+      {layoutMode === 'grid' ? (
+        /* GOOGLE MEET FULL VIEW: Shared Music Video Stage + All Participants Meet Grid Side-by-Side */
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden bg-[#111214] p-2 sm:p-2.5 gap-2 sm:gap-2.5">
+          
+          {/* Main: Shared Music Video Stage */}
+          {children ? (
+            <div className="flex-1 min-h-[200px] sm:min-h-[250px] lg:min-h-0 relative flex items-center justify-center bg-black rounded-xl overflow-hidden shadow-2xl border border-[#3c4043]/40">
+              {children}
+            </div>
+          ) : null}
 
-            {/* Tile Info Bar */}
-            <div className="absolute bottom-1.5 left-2 right-2 flex items-center justify-between text-[11px] font-semibold text-white pointer-events-none drop-shadow">
-              <span className="bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded truncate max-w-[100px]">
-                {currentUser?.name || 'You'} (You)
+          {/* Side: Google Meet Participants Grid (All room members visible!) */}
+          <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col min-h-[160px] lg:min-h-0 bg-[#1e1f22] rounded-xl border border-[#3c4043]/40 overflow-hidden shadow-xl">
+            <div className="h-8 px-3 bg-[#202124] border-b border-[#3c4043]/40 flex items-center justify-between flex-shrink-0 select-none">
+              <span className="text-[11px] font-bold text-[#e8eaed] flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-[#34a853]" />
+                <span>Meeting Grid ({totalCallCount})</span>
               </span>
-              <div className="bg-black/70 backdrop-blur-sm p-1 rounded-full">
-                {isMicOn ? (
-                  <Mic className="w-3 h-3 text-[#34a853]" />
+              <span className="text-[10px] text-[#34a853] bg-[#34a853]/15 border border-[#34a853]/30 px-2 py-0.5 rounded-full font-bold">
+                Live
+              </span>
+            </div>
+
+            <div className="flex-1 p-2 grid grid-cols-2 lg:grid-cols-1 gap-2 overflow-y-auto no-scrollbar">
+              {/* USER'S OWN VIDEO TILE */}
+              <div 
+                className="relative rounded-xl overflow-hidden bg-[#202124] border border-[#3c4043] flex items-center justify-center shadow-md aspect-video min-h-[120px]"
+              >
+                {isCameraOn || isScreenSharing ? (
+                  <video
+                    ref={localVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
+                  />
                 ) : (
-                  <MicOff className="w-3 h-3 text-[#ea4335]" />
+                  <div className="flex flex-col items-center justify-center text-center p-2 select-none">
+                    <div 
+                      className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-md mb-1 ring-2 ${
+                        isMicOn ? 'ring-[#34a853]' : 'ring-[#ea4335]'
+                      }`}
+                      style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
+                    >
+                      {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+                    </div>
+                    <span className="text-[10px] text-[#9aa0a6] font-medium">Camera Off</span>
+                  </div>
                 )}
+
+                {/* Tile Info Bar */}
+                <div className="absolute bottom-1.5 left-2 right-2 flex items-center justify-between text-[11px] font-semibold text-white pointer-events-none drop-shadow">
+                  <span className="bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded truncate max-w-[100px]">
+                    {currentUser?.name || 'You'} (You)
+                  </span>
+                  <div className="bg-black/70 backdrop-blur-sm p-1 rounded-full">
+                    {isMicOn ? (
+                      <Mic className="w-3 h-3 text-[#34a853]" />
+                    ) : (
+                      <MicOff className="w-3 h-3 text-[#ea4335]" />
+                    )}
+                  </div>
+                </div>
               </div>
+
+              {/* REMOTE MEMBERS' VIDEO TILES */}
+              {allRemoteParticipants.map((member) => {
+                const peerData = peers[member.id] || {
+                  userName: member.name,
+                  avatarColor: member.avatarColor,
+                  isMuted: member.isMuted ?? false,
+                  isCameraOff: true,
+                  stream: null
+                };
+                return (
+                  <RemotePeerTile
+                    key={member.id}
+                    peerId={member.id}
+                    peerData={peerData}
+                    layoutMode={layoutMode}
+                  />
+                );
+              })}
             </div>
           </div>
 
-          {/* REMOTE PEERS' VIDEO TILES */}
-          {peerList.map(([peerId, peerData]) => (
-            <RemotePeerTile
-              key={peerId}
-              peerId={peerId}
-              peerData={peerData}
-              layoutMode={layoutMode}
-            />
-          ))}
+        </div>
+      ) : (
+        /* THEATER VIEW: Focus on big screen, with optional camera strip at top */
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+          {hasActiveVideo && (
+            <div className="flex items-center gap-2 overflow-x-auto border-b border-[#2b2d31] p-2 bg-[#111214] no-scrollbar max-h-28 flex-shrink-0">
+              {/* Compact local tile */}
+              <div className="w-32 h-20 sm:w-44 sm:h-28 flex-shrink-0 relative rounded-xl overflow-hidden bg-[#202124] border border-[#3c4043] flex items-center justify-center shadow-lg">
+                {isCameraOn || isScreenSharing ? (
+                  <video
+                    ref={localVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center text-center p-2 select-none">
+                    <div 
+                      className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold text-white shadow ring-2 ${
+                        isMicOn ? 'ring-[#34a853]' : 'ring-[#ea4335]'
+                      }`}
+                      style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
+                    >
+                      {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+                    </div>
+                  </div>
+                )}
+                <div className="absolute bottom-1 left-1.5 right-1.5 flex items-center justify-between text-[10px] font-semibold text-white pointer-events-none drop-shadow">
+                  <span className="bg-black/70 px-1.5 py-0.2 rounded truncate max-w-[80px]">
+                    {currentUser?.name || 'You'} (You)
+                  </span>
+                  <div className="bg-black/70 p-0.5 rounded-full">
+                    {isMicOn ? <Mic className="w-2.5 h-2.5 text-[#34a853]" /> : <MicOff className="w-2.5 h-2.5 text-[#ea4335]" />}
+                  </div>
+                </div>
+              </div>
 
-          {/* If alone in call message */}
-          {peerList.length === 0 && layoutMode === 'grid' && (
-            <div className="col-span-full py-8 text-center text-[#9aa0a6] text-xs">
-              <Users className="w-8 h-8 opacity-40 mx-auto mb-2 text-[#8ab4f8]" />
-              <span>Waiting for friends to join the video lounge... Share the invite link with them!</span>
+              {/* Compact remote tiles */}
+              {allRemoteParticipants.map((member) => {
+                const peerData = peers[member.id] || {
+                  userName: member.name,
+                  avatarColor: member.avatarColor,
+                  isMuted: member.isMuted ?? false,
+                  isCameraOff: true,
+                  stream: null
+                };
+                return (
+                  <RemotePeerTile
+                    key={member.id}
+                    peerId={member.id}
+                    peerData={peerData}
+                    layoutMode="strip"
+                  />
+                );
+              })}
             </div>
           )}
+
+          {/* Theater Screen Container */}
+          <div className="flex-1 min-h-0 relative flex items-center justify-center bg-[#111214] p-1.5 sm:p-3 overflow-hidden">
+            {children}
+          </div>
         </div>
       )}
 
@@ -732,9 +849,9 @@ function RemotePeerTile({ peerId, peerData, layoutMode }) {
 
   return (
     <div 
-      className={`relative rounded-xl overflow-hidden bg-[#202124] border-2 border-[#3c4043] flex items-center justify-center shadow-lg transition-all ${
+      className={`relative rounded-xl overflow-hidden bg-[#202124] border border-[#3c4043] flex items-center justify-center shadow-lg transition-all ${
         layoutMode === 'grid' 
-          ? 'w-full aspect-video min-h-[160px] sm:min-h-[180px]' 
+          ? 'w-full aspect-video min-h-[120px]' 
           : 'w-32 h-20 sm:w-44 sm:h-28 flex-shrink-0'
       }`}
     >
@@ -747,14 +864,18 @@ function RemotePeerTile({ peerId, peerData, layoutMode }) {
           className="w-full h-full object-cover"
         />
       ) : (
-        <div className="flex flex-col items-center justify-center text-center p-3">
+        <div className="flex flex-col items-center justify-center text-center p-2 select-none">
           <div 
-            className="w-12 h-12 rounded-full flex items-center justify-center text-base font-bold text-white shadow-md mb-1 ring-2 ring-[#5f6368]"
+            className={`rounded-full flex items-center justify-center font-bold text-white shadow-md mb-1 ring-2 ${
+              layoutMode === 'grid' ? 'w-11 h-11 text-sm' : 'w-9 h-9 text-xs'
+            } ${peerData.isMuted ? 'ring-[#ea4335]' : 'ring-[#34a853]'}`}
             style={{ backgroundColor: peerData.avatarColor || '#5865f2' }}
           >
             {peerData.userName?.charAt(0).toUpperCase() || 'P'}
           </div>
-          <span className="text-[10px] text-[#9aa0a6]">Camera Off</span>
+          {layoutMode === 'grid' && (
+            <span className="text-[10px] text-[#9aa0a6] font-medium">Camera Off</span>
+          )}
         </div>
       )}
 

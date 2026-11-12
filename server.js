@@ -857,11 +857,26 @@ io.on('connection', (socket) => {
   // 17. WebRTC Voice & Video Call Signaling (Google Meet / Discord Style)
   socket.on('webrtc:join-call', () => {
     if (!currentRoomId) return;
+    const room = rooms.get(currentRoomId);
+    if (!room) return;
+
+    // 1. Announce to all existing peers in the room
     socket.to(currentRoomId).emit('webrtc:peer-joined', {
       peerId: socket.id,
       userName: currentUser?.name || 'Member',
       avatarColor: currentUser?.avatarColor
     });
+
+    // 2. Return all existing online peers in this room to the joining socket
+    const existingPeers = (room.members || [])
+      .filter(m => m.id !== socket.id && m.isOnline)
+      .map(m => ({
+        peerId: m.id,
+        userName: m.name,
+        avatarColor: m.avatarColor
+      }));
+
+    socket.emit('webrtc:existing-peers', { peers: existingPeers });
   });
 
   socket.on('webrtc:signal', ({ to, signal, type }) => {

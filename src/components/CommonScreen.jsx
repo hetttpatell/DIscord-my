@@ -1157,7 +1157,7 @@ export default function CommonScreen({
             </div>
           </div>
 
-          {/* WEBRTC REAL-TIME VOICE & VIDEO CALL BAR (Meet & Discord style) */}
+          {/* WEBRTC REAL-TIME VOICE & VIDEO CALL BAR + STAGE (Google Meet & Theater style) */}
           <VideoCallGrid
             room={room}
             currentUser={currentUser}
@@ -1165,12 +1165,7 @@ export default function CommonScreen({
             layoutMode={callLayoutMode}
             onToggleLayoutMode={() => setCallLayoutMode(prev => prev === 'strip' ? 'grid' : 'strip')}
             onLeaveRoom={handleLeaveRoom}
-          />
-
-          {/* MAIN VIDEO PLAYER / STREAM STAGE */}
-          {callLayoutMode !== 'grid' && (
-            <div className="flex-1 min-h-0 relative bg-[#111214] flex items-center justify-center overflow-hidden p-1.5 sm:p-3">
-            
+          >
             {/* 16:9 Stream Container */}
             <div className="relative w-full max-w-[1280px] max-h-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-[#383a40] flex items-center justify-center">
               
@@ -1249,8 +1244,7 @@ export default function CommonScreen({
               </div>
 
             </div>
-          </div>
-          )}
+          </VideoCallGrid>
 
           {/* STREAM BOTTOM CONTROLS BAR */}
           <div className="bg-[#2b2d31] border-t border-[#232428] px-3 sm:px-4 py-2 sm:py-2.5 flex flex-col gap-1.5 sm:gap-2 flex-shrink-0">

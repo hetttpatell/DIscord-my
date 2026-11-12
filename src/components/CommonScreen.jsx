@@ -1164,6 +1164,7 @@ export default function CommonScreen({
             members={members}
             layoutMode={callLayoutMode}
             onToggleLayoutMode={() => setCallLayoutMode(prev => prev === 'strip' ? 'grid' : 'strip')}
+            onLeaveRoom={handleLeaveRoom}
           />
 
           {/* MAIN VIDEO PLAYER / STREAM STAGE */}

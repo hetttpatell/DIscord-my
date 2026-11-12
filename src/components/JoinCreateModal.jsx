@@ -75,6 +75,11 @@ export default function JoinCreateModal({
     setIsLoading(true);
     setErrorMessage(null);
 
+    // Pre-request microphone access on this direct user click gesture (prevents mobile browser warnings)
+    if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+      navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
+    }
+
     const generatedId = createRoomId.trim() || Math.random().toString(36).substring(2, 8).toUpperCase();
 
     const sessionId = getSessionId();
@@ -105,6 +110,11 @@ export default function JoinCreateModal({
 
     setIsLoading(true);
     setErrorMessage(null);
+
+    // Pre-request microphone access on this direct user click gesture (prevents mobile browser warnings)
+    if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+      navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
+    }
 
     const sessionId = getSessionId();
 

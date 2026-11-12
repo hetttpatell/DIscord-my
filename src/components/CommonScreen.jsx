@@ -1131,8 +1131,8 @@ export default function CommonScreen({
         {/* ======================================================== */}
         <main className="flex-1 bg-[#313338] flex flex-col overflow-hidden relative">
           
-          {/* Stream Top Info Bar */}
-          <div className="h-11 bg-[#2b2d31] border-b border-[#232428] px-4 flex items-center justify-between flex-shrink-0">
+          {/* Stream Top Info Bar (Desktop only, mobile uses Google Meet top bar) */}
+          <div className="h-11 bg-[#2b2d31] border-b border-[#232428] px-4 hidden sm:flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-2.5 h-2.5 rounded-full bg-[#f23f43] animate-pulse flex-shrink-0" />
               <div className="min-w-0 flex items-center gap-2">

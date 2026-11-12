@@ -5,22 +5,33 @@ import {
   Video, 
   VideoOff, 
   ScreenShare, 
-  StopCircle, 
   LayoutGrid, 
   Tv, 
   Users, 
-  Volume2, 
   PhoneOff, 
-  PhoneCall, 
-  Sparkles 
+  ArrowLeft,
+  Copy,
+  Check,
+  Share2,
+  SwitchCamera
 } from 'lucide-react';
 import socket from '../services/socket';
 
+// STUN + OpenRelay TURN servers (guarantees WebRTC mobile carrier / symmetric NAT traversal)
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
+    { urls: 'stun:stun2.l.google.com:19302' },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp'
+      ],
+      username: 'openrelay',
+      credential: 'openrelay'
+    }
   ]
 };
 
@@ -28,22 +39,43 @@ export default function VideoCallGrid({
   room,
   currentUser,
   members = [],
-  layoutMode = 'strip', // 'strip' (above video player) | 'grid' (Google Meet full grid)
+  layoutMode = 'grid', // 'grid' (Google Meet full view) | 'strip' (Theater stage)
   onToggleLayoutMode,
   onLeaveRoom,
   children
 }) {
-  const [isInCall, setIsInCall] = useState(true); // Always in call by default
-  const [isMicOn, setIsMicOn] = useState(true);   // Mic on by default
+  const [isInCall, setIsInCall] = useState(true);
+  const [isMicOn, setIsMicOn] = useState(true);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [peers, setPeers] = useState({}); // { [peerId]: { stream, userName, avatarColor, isMuted, isCameraOff } }
-  const [activeSpeakerId, setActiveSpeakerId] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   const localStreamRef = useRef(null);
   const localVideoRef = useRef(null);
   const peerConnections = useRef({}); // { [peerId]: RTCPeerConnection }
-  const audioContextRef = useRef(null);
+
+  const inviteUrl = typeof window !== 'undefined' ? `${window.location.origin}/?room=${room?.id || ''}` : '';
+
+  const copyInviteLink = () => {
+    if (!inviteUrl) return;
+    navigator.clipboard.writeText(inviteUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const shareInviteLink = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Join my meeting on afterspot: ${room?.name || 'Meeting'}`,
+          url: inviteUrl
+        });
+        return;
+      } catch (e) {}
+    }
+    copyInviteLink();
+  };
 
   // Attach local media tracks to all existing peer connections
   const attachLocalStreamToPeers = useCallback((stream) => {
@@ -123,7 +155,6 @@ export default function VideoCallGrid({
     startVoice().then(stream => {
       if (!isMounted) return;
       if (!stream) {
-        // Connected to voice lounge, user can tap Mic button to grant permission
         setIsInCall(true);
         setIsMicOn(false);
       }
@@ -151,12 +182,12 @@ export default function VideoCallGrid({
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnections.current[peerId] = pc;
 
-    // Upfront audio & video transceivers prevent renegotiation race conditions on mobile
+    // Upfront audio & video transceivers prevent renegotiation race conditions
     try {
       pc.addTransceiver('audio', { direction: 'sendrecv' });
       pc.addTransceiver('video', { direction: 'sendrecv' });
     } catch (e) {
-      console.debug('Transceivers initialization fallback:', e);
+      console.debug('Transceivers fallback:', e);
     }
 
     // Add local tracks to peer connection if available
@@ -216,7 +247,7 @@ export default function VideoCallGrid({
     return pc;
   }, []);
 
-  // Socket signaling listeners
+  // Socket signaling listeners with deterministic polite peer negotiation
   useEffect(() => {
     if (!isInCall) return;
 
@@ -225,15 +256,18 @@ export default function VideoCallGrid({
       if (!Array.isArray(existingPeersList)) return;
       existingPeersList.forEach(peer => {
         if (peer.peerId && peer.peerId !== socket.id) {
-          createPeerConnection(peer.peerId, peer.userName, peer.avatarColor, true);
+          // Deterministic initiator: only one side initiates to prevent glare
+          const isInitiator = socket.id > peer.peerId;
+          createPeerConnection(peer.peerId, peer.userName, peer.avatarColor, isInitiator);
         }
       });
     };
 
-    // Another peer joined the call -> initiator sends offer
+    // Another peer joined the call
     const handlePeerJoined = ({ peerId, userName, avatarColor }) => {
       if (peerId === socket.id) return;
-      createPeerConnection(peerId, userName, avatarColor, true);
+      const isInitiator = socket.id > peerId;
+      createPeerConnection(peerId, userName, avatarColor, isInitiator);
     };
 
     // Receive WebRTC signal (offer, answer, or candidate)
@@ -246,18 +280,40 @@ export default function VideoCallGrid({
         if (!pc) {
           pc = createPeerConnection(from, fromName, '#5865f2', false);
         }
-        await pc.setRemoteDescription(new RTCSessionDescription(signal));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
 
-        socket.emit('webrtc:signal', {
-          to: from,
-          signal: answer,
-          type: 'answer'
-        });
+        // Resolving glare with rollback if we also sent an offer
+        if (pc.signalingState !== 'stable') {
+          try {
+            await Promise.all([
+              pc.setLocalDescription({ type: 'rollback' }).catch(() => {}),
+              pc.setRemoteDescription(new RTCSessionDescription(signal))
+            ]);
+          } catch (e) {
+            console.warn('Rollback error:', e);
+          }
+        } else {
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(signal));
+          } catch (e) {
+            console.warn('Error setting remote description:', e);
+          }
+        }
+
+        try {
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          socket.emit('webrtc:signal', {
+            to: from,
+            signal: answer,
+            type: 'answer'
+          });
+        } catch (e) {
+          console.warn('Error creating/setting answer:', e);
+        }
       } else if (type === 'answer') {
         if (pc) {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal));
+          await pc.setRemoteDescription(new RTCSessionDescription(signal)).catch(e => console.warn('Answer set error:', e));
         }
       } else if (type === 'candidate') {
         if (pc && signal) {
@@ -316,45 +372,6 @@ export default function VideoCallGrid({
     };
   }, [isInCall, createPeerConnection]);
 
-  // Join Call (Start Mic or Video)
-  const joinCall = async (withVideo = false) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: withVideo ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 360 } } : false
-      });
-
-      localStreamRef.current = stream;
-      setIsInCall(true);
-      setIsMicOn(true);
-      setIsCameraOn(withVideo);
-      attachLocalStreamToPeers(stream);
-
-      // Notify room of initial media state
-      socket.emit('webrtc:media-state', {
-        isMuted: false,
-        isCameraOff: !withVideo,
-        isScreenSharing: false
-      });
-    } catch (err) {
-      console.warn('Camera/Mic permission fallback:', err);
-      // Fallback to audio only if video failed
-      try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        localStreamRef.current = audioStream;
-        setIsInCall(true);
-        setIsMicOn(true);
-        setIsCameraOn(false);
-        attachLocalStreamToPeers(audioStream);
-      } catch (audioErr) {
-        console.warn('Microphone permission deferred or denied:', audioErr);
-        setIsInCall(true);
-        setIsMicOn(false);
-        setIsCameraOn(false);
-      }
-    }
-  };
-
   // Leave Call
   const leaveCall = () => {
     if (localStreamRef.current) {
@@ -374,7 +391,7 @@ export default function VideoCallGrid({
     socket.emit('webrtc:leave-call');
   };
 
-  // Toggle Microphone (with auto-request fallback on user gesture)
+  // Toggle Microphone
   const toggleMic = async () => {
     if (!localStreamRef.current || localStreamRef.current.getAudioTracks().length === 0) {
       const stream = await startVoice();
@@ -396,10 +413,9 @@ export default function VideoCallGrid({
     }
   };
 
-  // Toggle Camera (with mobile-friendly constraints and no alert popups)
+  // Toggle Camera
   const toggleCamera = async () => {
     if (isCameraOn) {
-      // Turn off camera
       const videoTrack = localStreamRef.current?.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.stop();
@@ -407,7 +423,6 @@ export default function VideoCallGrid({
       }
       setIsCameraOn(false);
 
-      // Update peer connections
       Object.values(peerConnections.current).forEach(pc => {
         const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
         if (sender) pc.removeTrack(sender);
@@ -419,7 +434,6 @@ export default function VideoCallGrid({
         isScreenSharing
       });
     } else {
-      // Turn on camera with mobile-friendly constraints
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
 
       let videoStream = null;
@@ -431,7 +445,7 @@ export default function VideoCallGrid({
         try {
           videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
         } catch (e2) {
-          console.warn('Camera permission denied or camera unavailable:', e2);
+          console.warn('Camera permission denied:', e2);
           return;
         }
       }
@@ -447,9 +461,15 @@ export default function VideoCallGrid({
 
         setIsCameraOn(true);
 
-        // Add track to existing peer connections
         Object.values(peerConnections.current).forEach(pc => {
-          pc.addTrack(newVideoTrack, localStreamRef.current);
+          const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+          if (sender) {
+            sender.replaceTrack(newVideoTrack).catch(() => {});
+          } else {
+            try {
+              pc.addTrack(newVideoTrack, localStreamRef.current);
+            } catch (e) {}
+          }
         });
 
         socket.emit('webrtc:media-state', {
@@ -463,12 +483,7 @@ export default function VideoCallGrid({
 
   // Toggle Screen Share
   const toggleScreenShare = async () => {
-    if (!isInCall) {
-      await joinCall(false);
-    }
-
     if (isScreenSharing) {
-      // Stop screen share -> revert to camera if it was on
       const screenTrack = localStreamRef.current?.getVideoTracks()[0];
       if (screenTrack) screenTrack.stop();
       setIsScreenSharing(false);
@@ -478,7 +493,6 @@ export default function VideoCallGrid({
         const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
         const screenTrack = displayStream.getVideoTracks()[0];
 
-        // Replace or add track to peers
         Object.values(peerConnections.current).forEach(pc => {
           const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
           if (sender) {
@@ -504,7 +518,7 @@ export default function VideoCallGrid({
     }
   };
 
-  // Derive full participants list from room members (so all room members always appear in Meet grid)
+  // Derive remote participants list from room members
   const currentUserId = currentUser?.id || socket.id;
   const remoteMemberList = (members || []).filter(m => 
     m.id !== currentUserId && 
@@ -512,7 +526,6 @@ export default function VideoCallGrid({
     (!currentUser?.sessionId || m.sessionId !== currentUser.sessionId)
   );
 
-  // Merge any WebRTC peers that might not yet be in members array
   const remotePeerIds = new Set(remoteMemberList.map(m => m.id));
   const extraPeers = Object.entries(peers)
     .filter(([peerId]) => !remotePeerIds.has(peerId) && peerId !== socket.id)
@@ -526,12 +539,12 @@ export default function VideoCallGrid({
 
   const allRemoteParticipants = [...remoteMemberList, ...extraPeers];
   const totalCallCount = allRemoteParticipants.length + 1;
-  const hasActiveVideo = isCameraOn || isScreenSharing || Object.values(peers).some(p => !p.isCameraOff && p.stream?.getVideoTracks().length > 0);
+  const isAlone = allRemoteParticipants.length === 0;
 
   return (
-    <div className="w-full flex flex-col transition-all flex-shrink-0 z-20">
+    <div className="flex-1 min-h-0 flex flex-col bg-[#121212] overflow-hidden relative select-none">
       
-      {/* Permanent hidden audio elements for remote peers: guarantees uninterrupted mobile voice lounge */}
+      {/* Permanent hidden audio elements for remote peers */}
       <div className="hidden" aria-hidden="true">
         {Object.entries(peers).map(([peerId, peerData]) => (
           <audio
@@ -542,7 +555,7 @@ export default function VideoCallGrid({
                   el.srcObject = peerData.stream;
                 }
                 el.play().catch(err => {
-                  console.debug('Autoplay deferred until interaction:', err);
+                  console.debug('Autoplay deferred:', err);
                 });
               }
             }}
@@ -552,284 +565,254 @@ export default function VideoCallGrid({
         ))}
       </div>
 
-      {/* 1. GOOGLE MEET FLOATING CALL CONTROL DOCK */}
-      <div className="h-12 bg-[#202124]/95 border-b border-[#3c4043]/50 px-2.5 sm:px-4 flex items-center justify-between backdrop-blur-md select-none">
+      {/* 1. GOOGLE MEET TOP HEADER BAR */}
+      <div className="h-14 px-4 bg-[#121212] flex items-center justify-between flex-shrink-0 z-30 select-none">
+        <button 
+          onClick={onLeaveRoom}
+          className="w-10 h-10 rounded-full bg-[#202124] hover:bg-[#3c4043] text-white flex items-center justify-center transition-all active:scale-95 shadow-sm"
+          title="Exit meeting"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+
+        {/* Center Pill: "You're the only one here" or Room Title */}
+        <div className="px-4 py-1.5 rounded-full bg-[#202124] border border-[#3c4043]/50 text-[#e8eaed] text-xs font-semibold flex items-center gap-2 shadow-sm">
+          <span className={`w-2 h-2 rounded-full ${isMicOn ? 'bg-[#34a853] animate-pulse' : 'bg-[#ea4335]'}`} />
+          <span className="truncate max-w-[200px]">
+            {isAlone ? "You're the only one here" : `${room?.name || 'Meeting'} (${totalCallCount})`}
+          </span>
+        </div>
+
+        {/* View Switcher: Theater View vs Meet Grid View */}
+        <button 
+          onClick={onToggleLayoutMode}
+          className="w-10 h-10 rounded-full bg-[#202124] hover:bg-[#3c4043] text-white flex items-center justify-center transition-all active:scale-95 shadow-sm"
+          title={layoutMode === 'grid' ? "Switch to Theater Stage" : "Switch to Google Meet Grid"}
+        >
+          {layoutMode === 'grid' ? <Tv className="w-5 h-5 text-[#8ab4f8]" /> : <LayoutGrid className="w-5 h-5 text-white" />}
+        </button>
+      </div>
+
+      {/* 2. MAIN BODY (GOOGLE MEET UI) */}
+      <div className="flex-1 min-h-0 relative flex flex-col overflow-hidden">
         
-        {/* Left: Voice Status & Participant Avatars */}
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#34a853] animate-pulse" />
-            <span className="text-xs font-semibold text-[#e8eaed] hidden xs:inline tracking-wide">
-              Voice Lounge
-            </span>
-            <span className="text-[11px] font-mono font-bold bg-[#34a853]/15 text-[#34a853] px-2 py-0.5 rounded-full border border-[#34a853]/30">
-              {totalCallCount}
-            </span>
-          </div>
+        {/* CASE A: ALONE IN ROOM -> EXACT GOOGLE MEET EMPTY STATE */}
+        {isAlone ? (
+          <div className="flex-1 min-h-0 relative flex flex-col justify-center px-6 sm:px-12 bg-[#121212] overflow-hidden">
+            
+            {/* Google Meet Share Invite Card */}
+            <div className="max-w-md w-full animate-fade-in z-10 pb-16">
+              <h2 className="text-2xl sm:text-3xl font-medium text-white mb-2 tracking-tight">
+                You're the only one here
+              </h2>
+              <p className="text-xs sm:text-sm text-[#9aa0a6] mb-5 leading-relaxed max-w-sm">
+                Share this meeting link with others you want in the meeting
+              </p>
 
-          <div className="hidden sm:block h-4 w-[1px] bg-[#3c4043]" />
+              {/* Meeting Link Pill Box with Copy Action */}
+              <div 
+                onClick={copyInviteLink}
+                className="flex items-center justify-between px-4 py-3 rounded-xl bg-[#202124] border border-[#3c4043] text-[#e8eaed] text-xs sm:text-sm font-mono cursor-pointer hover:border-[#5f6368] active:scale-98 transition-all mb-4 shadow-md group"
+              >
+                <span className="truncate mr-2 text-[#8ab4f8]">{inviteUrl}</span>
+                {copied ? <Check className="w-5 h-5 text-[#34a853] flex-shrink-0" /> : <Copy className="w-5 h-5 text-[#9aa0a6] group-hover:text-white flex-shrink-0" />}
+              </div>
 
-          {/* Connected Voice Members Facepile */}
-          <div className="flex items-center -space-x-2 overflow-hidden">
-            {/* Current user's avatar */}
-            <div 
-              className={`relative w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow ring-2 flex-shrink-0 transition-all ${
-                isMicOn ? 'ring-[#34a853]' : 'ring-[#ea4335]'
-              }`}
-              style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
-              title={`${currentUser?.name || 'You'} (${isMicOn ? 'Microphone Active' : 'Microphone Muted'})`}
-            >
-              {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
-              {!isMicOn && (
-                <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-[#ea4335] rounded-full border border-[#202124]" />
-              )}
+              {/* Google Meet Coral Pill Share Button */}
+              <button 
+                onClick={shareInviteLink}
+                className="flex items-center gap-2.5 px-6 py-3 rounded-full bg-[#f28b82] hover:bg-[#f6aea9] text-[#202124] font-bold text-xs sm:text-sm shadow-xl active:scale-95 transition-all"
+              >
+                <Share2 className="w-4 h-4" />
+                <span>Share invite</span>
+              </button>
             </div>
 
-            {/* Remote members' avatars */}
-            {allRemoteParticipants.map((member) => {
-              const peerData = peers[member.id] || {};
-              const isMuted = peerData.isMuted ?? member.isMuted ?? false;
-              return (
-                <div 
-                  key={member.id}
-                  className={`relative w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow ring-2 flex-shrink-0 transition-all ${
-                    isMuted ? 'ring-[#ea4335]' : 'ring-[#34a853]'
-                  }`}
-                  style={{ backgroundColor: member.avatarColor || '#5865f2' }}
-                  title={`${member.name || 'Member'} (${isMuted ? 'Muted' : 'Speaking'})`}
-                >
-                  {member.name?.charAt(0).toUpperCase() || 'P'}
+            {/* Floating Self Video PIP Tile (bottom-right, exactly like Google Meet!) */}
+            <div className="absolute bottom-24 sm:bottom-28 right-4 sm:right-8 w-32 h-44 sm:w-44 sm:h-56 rounded-2xl overflow-hidden shadow-2xl border-2 border-[#3c4043] bg-[#202124] flex items-center justify-center z-20">
+              {isCameraOn || isScreenSharing ? (
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center text-center p-3 select-none">
+                  <div 
+                    className={`w-12 h-12 rounded-full flex items-center justify-center text-lg font-bold text-white shadow-md mb-1.5 ring-2 ${
+                      isMicOn ? 'ring-[#34a853]' : 'ring-[#ea4335]'
+                    }`}
+                    style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
+                  >
+                    {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+                  </div>
+                  <span className="text-[10px] text-[#9aa0a6]">Camera Off</span>
                 </div>
-              );
-            })}
+              )}
+
+              {/* Camera Flip Button */}
+              <button 
+                onClick={toggleCamera} 
+                className="absolute bottom-2 right-2 w-7 h-7 rounded-full bg-black/60 backdrop-blur-md text-white flex items-center justify-center hover:bg-black/80 shadow transition-transform active:scale-90"
+                title="Toggle / Flip Camera"
+              >
+                <SwitchCamera className="w-3.5 h-3.5" />
+              </button>
+
+              <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-semibold text-white">
+                You
+              </div>
+            </div>
+
           </div>
-        </div>
+        ) : (
+          /* CASE B: MULTIPLE MEMBERS CONNECTED -> FULL GOOGLE MEET TILES */
+          <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden bg-[#121212] p-2 gap-2">
+            
+            {/* If video/music is shared: Pinned Shared Stage */}
+            {children ? (
+              <div className="flex-1 min-h-[180px] sm:min-h-[240px] lg:min-h-0 w-full relative flex items-center justify-center bg-black rounded-xl overflow-hidden shadow-2xl border border-[#3c4043]/40">
+                {children}
+              </div>
+            ) : null}
 
-        {/* Center / Right: Google Meet Style Rounded Action Pill Bar */}
-        <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-          
-          {/* Mic Button */}
-          <button
-            onClick={toggleMic}
-            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-all shadow-sm active:scale-95 ${
-              isMicOn
-                ? 'bg-[#3c4043] hover:bg-[#4a4e52] text-white border border-[#5f6368]/30'
-                : 'bg-[#ea4335] hover:bg-[#d93025] text-white shadow-md shadow-[#ea4335]/30 animate-pulse'
-            }`}
-            title={isMicOn ? 'Turn off microphone' : 'Turn on microphone'}
-            aria-label={isMicOn ? 'Turn off microphone' : 'Turn on microphone'}
-          >
-            {isMicOn ? <Mic className="w-4 h-4 text-white" /> : <MicOff className="w-4 h-4 text-white" />}
-          </button>
+            {/* Google Meet Participant Grid */}
+            <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col min-h-0 bg-[#1e1f22] rounded-xl border border-[#3c4043]/40 overflow-hidden shadow-xl">
+              <div className="h-8 px-3 bg-[#202124] border-b border-[#3c4043]/40 flex items-center justify-between flex-shrink-0">
+                <span className="text-[11px] font-bold text-[#e8eaed] flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-[#34a853]" />
+                  <span>Participants ({totalCallCount})</span>
+                </span>
+                <span className="text-[10px] text-[#34a853] bg-[#34a853]/15 border border-[#34a853]/30 px-2 py-0.5 rounded-full font-bold">
+                  Live
+                </span>
+              </div>
 
-          {/* Camera Button */}
-          <button
-            onClick={toggleCamera}
-            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-all shadow-sm active:scale-95 ${
-              isCameraOn
-                ? 'bg-[#3c4043] hover:bg-[#4a4e52] text-white border border-[#5f6368]/30 ring-2 ring-[#34a853]/50'
-                : 'bg-[#3c4043] hover:bg-[#4a4e52] text-[#9aa0a6] hover:text-white border border-[#5f6368]/20'
-            }`}
-            title={isCameraOn ? 'Turn off camera' : 'Turn on camera'}
-            aria-label={isCameraOn ? 'Turn off camera' : 'Turn on camera'}
-          >
-            {isCameraOn ? <Video className="w-4 h-4 text-[#34a853]" /> : <VideoOff className="w-4 h-4" />}
-          </button>
+              <div className="flex-1 p-2 grid grid-cols-2 lg:grid-cols-1 gap-2 overflow-y-auto no-scrollbar">
+                {/* User Tile */}
+                <div className="relative rounded-xl overflow-hidden bg-[#202124] border border-[#3c4043] flex items-center justify-center shadow-md aspect-video min-h-[120px]">
+                  {isCameraOn || isScreenSharing ? (
+                    <video
+                      ref={localVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-center p-2 select-none">
+                      <div 
+                        className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-md mb-1 ring-2 ${
+                          isMicOn ? 'ring-[#34a853]' : 'ring-[#ea4335]'
+                        }`}
+                        style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
+                      >
+                        {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+                      </div>
+                      <span className="text-[10px] text-[#9aa0a6]">Camera Off</span>
+                    </div>
+                  )}
 
-          {/* Screen Share Button (Desktop Only) */}
-          <button
-            onClick={toggleScreenShare}
-            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full hidden sm:flex items-center justify-center transition-all border border-[#5f6368]/30 active:scale-95 ${
-              isScreenSharing
-                ? 'bg-[#1a73e8] hover:bg-[#1557b0] text-white ring-2 ring-[#8ab4f8]'
-                : 'bg-[#3c4043] hover:bg-[#4a4e52] text-white'
-            }`}
-            title={isScreenSharing ? 'Stop screen sharing' : 'Present screen'}
-            aria-label={isScreenSharing ? 'Stop screen sharing' : 'Present screen'}
-          >
-            <ScreenShare className="w-4 h-4" />
-          </button>
+                  <div className="absolute bottom-1.5 left-2 right-2 flex items-center justify-between text-[11px] font-semibold text-white pointer-events-none drop-shadow">
+                    <span className="bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded truncate max-w-[100px]">
+                      {currentUser?.name || 'You'} (You)
+                    </span>
+                    <div className="bg-black/70 backdrop-blur-sm p-1 rounded-full">
+                      {isMicOn ? <Mic className="w-3 h-3 text-[#34a853]" /> : <MicOff className="w-3 h-3 text-[#ea4335]" />}
+                    </div>
+                  </div>
+                </div>
 
-          {/* Layout Mode Switcher */}
-          <button
-            onClick={onToggleLayoutMode}
-            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-all border border-[#5f6368]/30 active:scale-95 ${
-              layoutMode === 'grid'
-                ? 'bg-[#1a73e8] hover:bg-[#1557b0] text-white'
-                : 'bg-[#3c4043] hover:bg-[#4a4e52] text-white'
-            }`}
-            title={layoutMode === 'grid' ? 'Switch to Theater Mode' : 'Switch to Grid View'}
-            aria-label={layoutMode === 'grid' ? 'Switch to Theater Mode' : 'Switch to Grid View'}
-          >
-            {layoutMode === 'grid' ? <Tv className="w-4 h-4" /> : <LayoutGrid className="w-4 h-4" />}
-          </button>
+                {/* Remote Member Tiles */}
+                {allRemoteParticipants.map((member) => {
+                  const peerData = peers[member.id] || {
+                    userName: member.name,
+                    avatarColor: member.avatarColor,
+                    isMuted: member.isMuted ?? false,
+                    isCameraOff: true,
+                    stream: null
+                  };
+                  return (
+                    <RemotePeerTile
+                      key={member.id}
+                      peerId={member.id}
+                      peerData={peerData}
+                      layoutMode="grid"
+                    />
+                  );
+                })}
+              </div>
+            </div>
 
-          {/* Leave Call Button (Red Google Meet Pill) */}
-          <button
-            onClick={onLeaveRoom || leaveCall}
-            className="h-9 sm:h-10 px-3.5 sm:px-4 rounded-full bg-[#ea4335] hover:bg-[#d93025] text-white flex items-center gap-1.5 shadow-md shadow-[#ea4335]/30 active:scale-95 transition-all flex-shrink-0"
-            title="Leave call"
-            aria-label="Leave call"
-          >
-            <PhoneOff className="w-4 h-4 text-white" />
-            <span className="text-xs font-bold hidden md:inline">Leave</span>
-          </button>
-        </div>
+          </div>
+        )}
 
       </div>
 
-      {/* 2. MAIN CONTENT: THEATER VIEW vs GOOGLE MEET VIEW */}
-      {layoutMode === 'grid' ? (
-        /* GOOGLE MEET FULL VIEW: Shared Music Video Stage + All Participants Meet Grid Side-by-Side */
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden bg-[#111214] p-0 sm:p-2.5 gap-2 sm:gap-2.5">
-          
-          {/* Main: Shared Music Video Stage */}
-          {children ? (
-            <div className="flex-1 min-h-[180px] sm:min-h-[250px] lg:min-h-0 w-full relative flex items-center justify-center bg-black rounded-none sm:rounded-xl overflow-hidden shadow-2xl border-0 sm:border border-[#3c4043]/40">
-              {children}
-            </div>
-          ) : null}
+      {/* 3. GOOGLE MEET FLOATING BOTTOM ACTION DOCK */}
+      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 sm:gap-3 px-4 py-2.5 rounded-full bg-[#202124]/95 backdrop-blur-md border border-[#3c4043] shadow-2xl">
+        {/* Camera Toggle Button */}
+        <button
+          onClick={toggleCamera}
+          className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shadow active:scale-95 ${
+            isCameraOn
+              ? 'bg-[#3c4043] text-white hover:bg-[#4a4e52] border border-[#5f6368]/30'
+              : 'bg-[#ea4335] text-white shadow-md shadow-[#ea4335]/30'
+          }`}
+          title={isCameraOn ? "Turn off camera" : "Turn on camera"}
+          aria-label={isCameraOn ? "Turn off camera" : "Turn on camera"}
+        >
+          {isCameraOn ? <Video className="w-5 h-5 text-white" /> : <VideoOff className="w-5 h-5 text-white" />}
+        </button>
 
-          {/* Side: Google Meet Participants Grid (All room members visible!) */}
-          <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col min-h-[160px] lg:min-h-0 bg-[#1e1f22] rounded-xl border border-[#3c4043]/40 overflow-hidden shadow-xl">
-            <div className="h-8 px-3 bg-[#202124] border-b border-[#3c4043]/40 flex items-center justify-between flex-shrink-0 select-none">
-              <span className="text-[11px] font-bold text-[#e8eaed] flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-[#34a853]" />
-                <span>Meeting Grid ({totalCallCount})</span>
-              </span>
-              <span className="text-[10px] text-[#34a853] bg-[#34a853]/15 border border-[#34a853]/30 px-2 py-0.5 rounded-full font-bold">
-                Live
-              </span>
-            </div>
+        {/* Mic Toggle Button */}
+        <button
+          onClick={toggleMic}
+          className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shadow active:scale-95 ${
+            isMicOn
+              ? 'bg-[#3c4043] text-white hover:bg-[#4a4e52] border border-[#5f6368]/30'
+              : 'bg-[#ea4335] text-white shadow-md shadow-[#ea4335]/30 animate-pulse'
+          }`}
+          title={isMicOn ? "Turn off microphone" : "Turn on microphone"}
+          aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
+        >
+          {isMicOn ? <Mic className="w-5 h-5 text-white" /> : <MicOff className="w-5 h-5 text-white" />}
+        </button>
 
-            <div className="flex-1 p-2 grid grid-cols-2 lg:grid-cols-1 gap-2 overflow-y-auto no-scrollbar">
-              {/* USER'S OWN VIDEO TILE */}
-              <div 
-                className="relative rounded-xl overflow-hidden bg-[#202124] border border-[#3c4043] flex items-center justify-center shadow-md aspect-video min-h-[120px]"
-              >
-                {isCameraOn || isScreenSharing ? (
-                  <video
-                    ref={localVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
-                  />
-                ) : (
-                  <div className="flex flex-col items-center justify-center text-center p-2 select-none">
-                    <div 
-                      className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-md mb-1 ring-2 ${
-                        isMicOn ? 'ring-[#34a853]' : 'ring-[#ea4335]'
-                      }`}
-                      style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
-                    >
-                      {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
-                    </div>
-                    <span className="text-[10px] text-[#9aa0a6] font-medium">Camera Off</span>
-                  </div>
-                )}
+        {/* Screen Share (Desktop only) */}
+        <button
+          onClick={toggleScreenShare}
+          className={`w-11 h-11 rounded-full hidden sm:flex items-center justify-center transition-all border border-[#5f6368]/30 active:scale-95 ${
+            isScreenSharing ? 'bg-[#1a73e8] text-white' : 'bg-[#3c4043] hover:bg-[#4a4e52] text-white'
+          }`}
+          title="Share screen"
+          aria-label="Share screen"
+        >
+          <ScreenShare className="w-5 h-5" />
+        </button>
 
-                {/* Tile Info Bar */}
-                <div className="absolute bottom-1.5 left-2 right-2 flex items-center justify-between text-[11px] font-semibold text-white pointer-events-none drop-shadow">
-                  <span className="bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded truncate max-w-[100px]">
-                    {currentUser?.name || 'You'} (You)
-                  </span>
-                  <div className="bg-black/70 backdrop-blur-sm p-1 rounded-full">
-                    {isMicOn ? (
-                      <Mic className="w-3 h-3 text-[#34a853]" />
-                    ) : (
-                      <MicOff className="w-3 h-3 text-[#ea4335]" />
-                    )}
-                  </div>
-                </div>
-              </div>
+        {/* Layout Switcher */}
+        <button
+          onClick={onToggleLayoutMode}
+          className="w-11 h-11 rounded-full bg-[#3c4043] hover:bg-[#4a4e52] text-white flex items-center justify-center transition-all border border-[#5f6368]/30 active:scale-95"
+          title={layoutMode === 'grid' ? "Switch to Theater Mode" : "Switch to Meet Grid"}
+          aria-label="Switch Layout"
+        >
+          {layoutMode === 'grid' ? <Tv className="w-5 h-5 text-[#8ab4f8]" /> : <LayoutGrid className="w-5 h-5 text-white" />}
+        </button>
 
-              {/* REMOTE MEMBERS' VIDEO TILES */}
-              {allRemoteParticipants.map((member) => {
-                const peerData = peers[member.id] || {
-                  userName: member.name,
-                  avatarColor: member.avatarColor,
-                  isMuted: member.isMuted ?? false,
-                  isCameraOff: true,
-                  stream: null
-                };
-                return (
-                  <RemotePeerTile
-                    key={member.id}
-                    peerId={member.id}
-                    peerData={peerData}
-                    layoutMode={layoutMode}
-                  />
-                );
-              })}
-            </div>
-          </div>
-
-        </div>
-      ) : (
-        /* THEATER VIEW: Focus on big screen, with optional camera strip at top */
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-          {hasActiveVideo && (
-            <div className="flex items-center gap-2 overflow-x-auto border-b border-[#2b2d31] p-2 bg-[#111214] no-scrollbar max-h-28 flex-shrink-0">
-              {/* Compact local tile */}
-              <div className="w-32 h-20 sm:w-44 sm:h-28 flex-shrink-0 relative rounded-xl overflow-hidden bg-[#202124] border border-[#3c4043] flex items-center justify-center shadow-lg">
-                {isCameraOn || isScreenSharing ? (
-                  <video
-                    ref={localVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className={`w-full h-full object-cover ${!isScreenSharing ? 'scale-x-[-1]' : ''}`}
-                  />
-                ) : (
-                  <div className="flex flex-col items-center justify-center text-center p-2 select-none">
-                    <div 
-                      className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold text-white shadow ring-2 ${
-                        isMicOn ? 'ring-[#34a853]' : 'ring-[#ea4335]'
-                      }`}
-                      style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
-                    >
-                      {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
-                    </div>
-                  </div>
-                )}
-                <div className="absolute bottom-1 left-1.5 right-1.5 flex items-center justify-between text-[10px] font-semibold text-white pointer-events-none drop-shadow">
-                  <span className="bg-black/70 px-1.5 py-0.2 rounded truncate max-w-[80px]">
-                    {currentUser?.name || 'You'} (You)
-                  </span>
-                  <div className="bg-black/70 p-0.5 rounded-full">
-                    {isMicOn ? <Mic className="w-2.5 h-2.5 text-[#34a853]" /> : <MicOff className="w-2.5 h-2.5 text-[#ea4335]" />}
-                  </div>
-                </div>
-              </div>
-
-              {/* Compact remote tiles */}
-              {allRemoteParticipants.map((member) => {
-                const peerData = peers[member.id] || {
-                  userName: member.name,
-                  avatarColor: member.avatarColor,
-                  isMuted: member.isMuted ?? false,
-                  isCameraOff: true,
-                  stream: null
-                };
-                return (
-                  <RemotePeerTile
-                    key={member.id}
-                    peerId={member.id}
-                    peerData={peerData}
-                    layoutMode="strip"
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          {/* Theater Screen Container - Full width and non-scrollable on mobile */}
-          <div className="flex-1 min-h-0 relative flex items-center justify-center bg-[#111214] p-0 sm:p-3 overflow-hidden w-full select-none touch-none">
-            {children}
-          </div>
-        </div>
-      )}
+        {/* Red End Call / Leave Button */}
+        <button
+          onClick={onLeaveRoom || leaveCall}
+          className="h-11 px-5 rounded-full bg-[#ea4335] hover:bg-[#d93025] text-white flex items-center justify-center shadow-lg shadow-[#ea4335]/30 active:scale-95 transition-all"
+          title="Leave meeting"
+          aria-label="Leave meeting"
+        >
+          <PhoneOff className="w-5 h-5 text-white" />
+        </button>
+      </div>
 
     </div>
   );
@@ -849,11 +832,7 @@ function RemotePeerTile({ peerId, peerData, layoutMode }) {
 
   return (
     <div 
-      className={`relative rounded-xl overflow-hidden bg-[#202124] border border-[#3c4043] flex items-center justify-center shadow-lg transition-all ${
-        layoutMode === 'grid' 
-          ? 'w-full aspect-video min-h-[120px]' 
-          : 'w-32 h-20 sm:w-44 sm:h-28 flex-shrink-0'
-      }`}
+      className="relative rounded-xl overflow-hidden bg-[#202124] border border-[#3c4043] flex items-center justify-center shadow-md aspect-video min-h-[120px]"
     >
       {hasVideoTrack ? (
         <video
@@ -866,16 +845,14 @@ function RemotePeerTile({ peerId, peerData, layoutMode }) {
       ) : (
         <div className="flex flex-col items-center justify-center text-center p-2 select-none">
           <div 
-            className={`rounded-full flex items-center justify-center font-bold text-white shadow-md mb-1 ring-2 ${
-              layoutMode === 'grid' ? 'w-11 h-11 text-sm' : 'w-9 h-9 text-xs'
-            } ${peerData.isMuted ? 'ring-[#ea4335]' : 'ring-[#34a853]'}`}
+            className={`w-11 h-11 rounded-full flex items-center justify-center font-bold text-white shadow-md mb-1 ring-2 ${
+              peerData.isMuted ? 'ring-[#ea4335]' : 'ring-[#34a853]'
+            }`}
             style={{ backgroundColor: peerData.avatarColor || '#5865f2' }}
           >
             {peerData.userName?.charAt(0).toUpperCase() || 'P'}
           </div>
-          {layoutMode === 'grid' && (
-            <span className="text-[10px] text-[#9aa0a6] font-medium">Camera Off</span>
-          )}
+          <span className="text-[10px] text-[#9aa0a6] font-medium">Camera Off</span>
         </div>
       )}
 
@@ -895,4 +872,3 @@ function RemotePeerTile({ peerId, peerData, layoutMode }) {
     </div>
   );
 }
-

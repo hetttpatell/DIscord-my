@@ -12,10 +12,10 @@ import {
 import socket from '../services/socket';
 
 function getSessionId() {
-  let sid = localStorage.getItem('togetherTune_sessionId');
+  let sid = sessionStorage.getItem('togetherTune_sessionId');
   if (!sid) {
     sid = `sess-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    localStorage.setItem('togetherTune_sessionId', sid);
+    sessionStorage.setItem('togetherTune_sessionId', sid);
   }
   return sid;
 }

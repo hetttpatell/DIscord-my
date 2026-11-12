@@ -1164,7 +1164,7 @@ export default function CommonScreen({
             members={members}
             layoutMode={callLayoutMode}
             onToggleLayoutMode={() => setCallLayoutMode(prev => prev === 'strip' ? 'grid' : 'strip')}
-            onLeaveRoom={handleLeaveRoom}
+            onLeaveRoom={onLeaveRoom}
           >
             {/* 16:9 Stream Container - Full width on mobile, rounded card on desktop */}
             <div className="relative w-full max-w-[1280px] max-h-full aspect-video bg-black rounded-none sm:rounded-xl overflow-hidden shadow-2xl border-y sm:border border-[#383a40] flex items-center justify-center">

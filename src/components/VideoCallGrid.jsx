@@ -216,18 +216,26 @@ export default function VideoCallGrid({
       }
     };
 
-    // Handle incoming remote track
+    // Handle incoming remote track (ensure audio & video tracks are merged into single stream)
     pc.ontrack = (event) => {
-      const remoteStream = event.streams[0] || new MediaStream([event.track]);
-      setPeers(prev => ({
-        ...prev,
-        [peerId]: {
-          ...prev[peerId],
-          stream: remoteStream,
-          userName: peerName || prev[peerId]?.userName || 'Member',
-          avatarColor: peerColor || prev[peerId]?.avatarColor || '#5865f2'
+      setPeers(prev => {
+        let stream = prev[peerId]?.stream;
+        if (!stream) {
+          stream = event.streams[0] || new MediaStream();
         }
-      }));
+        if (!stream.getTracks().some(t => t.id === event.track.id)) {
+          stream.addTrack(event.track);
+        }
+        return {
+          ...prev,
+          [peerId]: {
+            ...prev[peerId],
+            stream,
+            userName: peerName || prev[peerId]?.userName || 'Member',
+            avatarColor: peerColor || prev[peerId]?.avatarColor || '#5865f2'
+          }
+        };
+      });
     };
 
     // If initiator, create and send offer
@@ -544,8 +552,8 @@ export default function VideoCallGrid({
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-[#121212] overflow-hidden relative select-none">
       
-      {/* Permanent hidden audio elements for remote peers */}
-      <div className="hidden" aria-hidden="true">
+      {/* Permanent rendered audio elements for remote peers (offscreen so mobile browsers never suspend playback) */}
+      <div className="fixed -top-96 -left-96 w-1 h-1 opacity-0 pointer-events-none" aria-hidden="true">
         {Object.entries(peers).map(([peerId, peerData]) => (
           <audio
             key={`audio-${peerId}`}

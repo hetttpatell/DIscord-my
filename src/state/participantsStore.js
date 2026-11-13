@@ -119,71 +119,88 @@ class ParticipantsStore {
   // SUBSCRIPTIONS & SELECTORS
   // ==========================================
 
-  subscribe(listener) {
-    this.globalListeners.add(listener);
-    return () => this.globalListeners.delete(listener);
-  }
+  subscribe = (listener) => {
+    const target = this?.globalListeners ? this : participantsStore;
+    if (!target?.globalListeners) return () => {};
+    target.globalListeners.add(listener);
+    return () => target.globalListeners.delete(listener);
+  };
 
-  subscribeIds(listener) {
-    this.idsListeners.add(listener);
-    return () => this.idsListeners.delete(listener);
-  }
+  subscribeIds = (listener) => {
+    const target = this?.idsListeners ? this : participantsStore;
+    if (!target?.idsListeners) return () => {};
+    target.idsListeners.add(listener);
+    return () => target.idsListeners.delete(listener);
+  };
 
-  subscribeActiveSpeaker(listener) {
-    this.activeSpeakerListeners.add(listener);
-    return () => this.activeSpeakerListeners.delete(listener);
-  }
+  subscribeActiveSpeaker = (listener) => {
+    const target = this?.activeSpeakerListeners ? this : participantsStore;
+    if (!target?.activeSpeakerListeners) return () => {};
+    target.activeSpeakerListeners.add(listener);
+    return () => target.activeSpeakerListeners.delete(listener);
+  };
 
-  subscribeParticipant(id, listener) {
-    if (!this.participantListeners.has(id)) {
-      this.participantListeners.set(id, new Set());
+  subscribeParticipant = (id, listener) => {
+    const target = this?.participantListeners ? this : participantsStore;
+    if (!target?.participantListeners) return () => {};
+    if (!target.participantListeners.has(id)) {
+      target.participantListeners.set(id, new Set());
     }
-    const set = this.participantListeners.get(id);
+    const set = target.participantListeners.get(id);
     set.add(listener);
     return () => {
       set.delete(listener);
-      if (set.size === 0) this.participantListeners.delete(id);
+      if (set.size === 0) target.participantListeners.delete(id);
     };
-  }
+  };
 
-  subscribeAudioLevel(id, listener) {
-    if (!this.audioLevelListeners.has(id)) {
-      this.audioLevelListeners.set(id, new Set());
+  subscribeAudioLevel = (id, listener) => {
+    const target = this?.audioLevelListeners ? this : participantsStore;
+    if (!target?.audioLevelListeners) return () => {};
+    if (!target.audioLevelListeners.has(id)) {
+      target.audioLevelListeners.set(id, new Set());
     }
-    const set = this.audioLevelListeners.get(id);
+    const set = target.audioLevelListeners.get(id);
     set.add(listener);
     return () => {
       set.delete(listener);
-      if (set.size === 0) this.audioLevelListeners.delete(id);
+      if (set.size === 0) target.audioLevelListeners.delete(id);
     };
-  }
+  };
 
-  getSnapshot() {
-    return this.participantsList;
-  }
+  getSnapshot = () => {
+    const target = this?.participantsList ? this : participantsStore;
+    return target?.participantsList || [];
+  };
 
-  getParticipantIds() {
-    return this.participantIds;
-  }
+  getParticipantIds = () => {
+    const target = this?.participantIds ? this : participantsStore;
+    return target?.participantIds || [];
+  };
 
-  getActiveSpeakerId() {
-    return this.activeSpeakerId;
-  }
+  getActiveSpeakerId = () => {
+    const target = this?.participants ? this : participantsStore;
+    return target?.activeSpeakerId || null;
+  };
 
-  getParticipant(id) {
-    return this.participants.get(id) || null;
-  }
+  getParticipant = (id) => {
+    const target = this?.participants ? this : participantsStore;
+    return target?.participants?.get(id) || null;
+  };
 
-  getLocalParticipant() {
-    for (const p of this.participants.values()) {
+  getLocalParticipant = () => {
+    const target = this?.participants ? this : participantsStore;
+    if (!target?.participants) return null;
+    for (const p of target.participants.values()) {
       if (p.isLocal) return p;
     }
     return null;
-  }
+  };
 
-  getAudioLevel(id) {
-    return this.audioLevels.get(id) || 0;
-  }
+  getAudioLevel = (id) => {
+    const target = this?.audioLevels ? this : participantsStore;
+    return target?.audioLevels?.get(id) || 0;
+  };
 
   setAudioLevel(id, level) {
     this.audioLevels.set(id, level);

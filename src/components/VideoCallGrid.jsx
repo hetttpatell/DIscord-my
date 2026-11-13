@@ -232,9 +232,6 @@ export default function VideoCallGrid({
   const currentUserId = currentUser?.id;
   const peerList = Object.values(peers);
 
-  // Layout mode helper: true only in default theater strip mode without spotlight or screen share
-  const isTheaterMode = layoutMode === 'strip' && !pinnedParticipant && !(isScreenSharing && screenShareStream);
-
   const memberPeers = (members || [])
     .filter(m => m.id !== currentUserId && (!currentUser?.sessionId || m.sessionId !== currentUser.sessionId))
     .map(m => {
@@ -264,6 +261,9 @@ export default function VideoCallGrid({
         ? { isLocal: true, userName: currentUser?.name || 'You', stream: localStream, isMuted: !isMicOn, isCameraOff: !isCameraOn, isSpeaking: isLocalSpeaking }
         : remoteParticipants.find(p => p.peerId === pinnedPeerId))
     : null;
+
+  // Layout mode helper: true only in default theater strip mode without spotlight or screen share
+  const isTheaterMode = layoutMode === 'strip' && !pinnedParticipant && !(isScreenSharing && screenShareStream);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-[#121212] overflow-hidden relative select-none">

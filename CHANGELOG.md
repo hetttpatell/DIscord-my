@@ -77,6 +77,7 @@ All notable improvements and architectural hardening applied to **afterspot** (T
 - **Files Modified**: `src/components/JoinCreateModal.jsx`, `src/components/InsecureContextBanner.jsx`, `src/components/YouTubePlayer.jsx`, `src/components/VideoCallGrid.jsx`, `src/components/RemoteAudioLayer.jsx`, `src/services/clientId.js` (New), `scripts/verify-queue.mjs` (New)
 - **Changes**:
   - Defined missing `handleEnableMic` in `JoinCreateModal.jsx` to eliminate `Uncaught ReferenceError: handleEnableMic is not defined` during audio permission prompts.
+  - Resolved Temporal Dead Zone (TDZ) initialization ordering in `VideoCallGrid.jsx`, `App.jsx`, and `YouTubePlayer.jsx` eliminating `Uncaught ReferenceError: Cannot access 'Le' before initialization`.
   - Hardened YouTube volume ducking to trigger only on remote participant speech (`remoteIsSpeaking`), never on local mic input.
   - Restricted volume ducking on iOS devices where `setVolume` has no effect.
   - Removed deprecated `setPlaybackQuality('medium')`.

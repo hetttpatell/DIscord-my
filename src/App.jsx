@@ -51,6 +51,50 @@ export default function App() {
   // Toast notifications
   const [toast, setToast] = useState(null);
 
+  const showToast = (message) => {
+    setToast({ message, id: Date.now() });
+    setTimeout(() => {
+      setToast((curr) => (curr?.message === message ? null : curr));
+    }, 3000);
+  };
+
+  const handleRoomJoined = (roomData, userData, resumeToken = null) => {
+    setRoom(roomData);
+    setCurrentUser(userData);
+    setCurrentTrack(roomData.currentTrack || null);
+    setIsPlaying(Boolean(roomData.isPlaying));
+    setPlaybackPosition(roomData.playbackPosition || 0);
+    setMembers(roomData.members || []);
+    setWaitingList(roomData.waitingList || []);
+    setQueue(roomData.queue || []);
+    setChatMessages(roomData.chatMessages || []);
+
+    // Save active session with stable clientId and server-issued resumeToken (never store raw password)
+    const myClientId = getClientId();
+    let storedToken = resumeToken;
+    if (!storedToken) {
+      try {
+        const prev = JSON.parse(localStorage.getItem('togetherTune_activeSession') || '{}');
+        if (prev.roomId === roomData.id && prev.resumeToken) {
+          storedToken = prev.resumeToken;
+        }
+      } catch {}
+    }
+
+    localStorage.setItem('togetherTune_activeSession', JSON.stringify({
+      roomId: roomData.id,
+      clientId: myClientId,
+      userName: userData.name,
+      isHost: Boolean(userData.isHost),
+      resumeToken: storedToken || null
+    }));
+
+    const newUrl = `${window.location.pathname}?room=${roomData.id}`;
+    window.history.pushState({ path: newUrl }, '', newUrl);
+
+    showToast(`Connected: ${roomData.name}`);
+  };
+
   // Parse invite URL or restore active session on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -96,13 +140,6 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
-
-  const showToast = (message) => {
-    setToast({ message, id: Date.now() });
-    setTimeout(() => {
-      setToast((curr) => (curr?.message === message ? null : curr));
-    }, 3000);
-  };
 
   // Socket Events
   useEffect(() => {
@@ -248,43 +285,6 @@ export default function App() {
       socket.off('connect', handleReconnect);
     };
   }, []);
-
-  const handleRoomJoined = (roomData, userData, resumeToken = null) => {
-    setRoom(roomData);
-    setCurrentUser(userData);
-    setCurrentTrack(roomData.currentTrack || null);
-    setIsPlaying(Boolean(roomData.isPlaying));
-    setPlaybackPosition(roomData.playbackPosition || 0);
-    setMembers(roomData.members || []);
-    setWaitingList(roomData.waitingList || []);
-    setQueue(roomData.queue || []);
-    setChatMessages(roomData.chatMessages || []);
-
-    // Save active session with stable clientId and server-issued resumeToken (never store raw password)
-    const myClientId = getClientId();
-    let storedToken = resumeToken;
-    if (!storedToken) {
-      try {
-        const prev = JSON.parse(localStorage.getItem('togetherTune_activeSession') || '{}');
-        if (prev.roomId === roomData.id && prev.resumeToken) {
-          storedToken = prev.resumeToken;
-        }
-      } catch {}
-    }
-
-    localStorage.setItem('togetherTune_activeSession', JSON.stringify({
-      roomId: roomData.id,
-      clientId: myClientId,
-      userName: userData.name,
-      isHost: Boolean(userData.isHost),
-      resumeToken: storedToken || null
-    }));
-
-    const newUrl = `${window.location.pathname}?room=${roomData.id}`;
-    window.history.pushState({ path: newUrl }, '', newUrl);
-
-    showToast(`Connected: ${roomData.name}`);
-  };
 
   const handleLeaveRoom = () => {
     socket.emit('room:leave');

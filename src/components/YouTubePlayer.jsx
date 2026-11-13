@@ -37,94 +37,6 @@ export default function YouTubePlayer({
   // Track the last known props to detect real changes
   const lastSyncRef = useRef({ isPlaying: false, playbackPosition: 0, trackId: null });
 
-  // Load YouTube IFrame API
-  useEffect(() => {
-    if (window.YT && window.YT.Player) {
-      initPlayer();
-      return;
-    }
-
-    if (!document.getElementById('yt-iframe-api')) {
-      const tag = document.createElement('script');
-      tag.id = 'yt-iframe-api';
-      tag.src = 'https://www.youtube.com/iframe_api';
-      const firstScriptTag = document.getElementsByTagName('script')[0];
-      firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-    }
-
-    const previousReady = window.onYouTubeIframeAPIReady;
-    window.onYouTubeIframeAPIReady = () => {
-      if (previousReady) previousReady();
-      initPlayer();
-    };
-
-    return () => {
-      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
-        playerRef.current.destroy();
-        playerRef.current = null;
-      }
-    };
-  }, []);
-
-  const initPlayer = () => {
-    if (playerRef.current || !containerRef.current) return;
-
-    playerRef.current = new window.YT.Player(containerRef.current, {
-      height: '100%',
-      width: '100%',
-      videoId: currentTrack?.id || '',
-      playerVars: {
-        autoplay: 1,
-        controls: 0, // Custom collaborative controls only
-        disablekb: 1,
-        enablejsapi: 1,
-        fs: 0,
-        modestbranding: 1,
-        rel: 0,
-        origin: window.location.origin,
-        playsinline: 1, // Important for mobile
-        iv_load_policy: 3, // Disable video annotations
-        autohide: 1
-      },
-      events: {
-        onReady: (event) => {
-          setIsReady(true);
-          event.target.setVolume(volume);
-          if (isMuted) event.target.mute();
-
-          // Disable pointer events on the iframe so users cannot interact with YT directly
-          try {
-            const iframe = event.target.getIframe();
-            if (iframe) {
-              iframe.style.pointerEvents = 'none';
-              iframe.setAttribute('tabindex', '-1');
-            }
-          } catch (e) {
-            console.debug('Iframe style setup:', e);
-          }
-
-          // Sync initial state
-          if (currentTrack?.id) {
-            syncPlayerState(isPlaying, playbackPosition);
-          }
-        },
-        onStateChange: handlePlayerStateChange,
-        onError: (e) => {
-          console.warn('YouTube Player Error:', e.data);
-          // If video unavailable/restricted, notify and skip to next
-          if (e.data === 150 || e.data === 101 || e.data === 100) {
-            console.log('Restricted video, auto-skipping...');
-            const entryId = currentTrack?.entryId;
-            if (entryId && lastEndedEntryIdRef.current !== entryId) {
-              lastEndedEntryIdRef.current = entryId;
-              socket.emit('player:skip', { entryId });
-            }
-          }
-        }
-      }
-    });
-  };
-
   // Handle YouTube player state changes
   // YouTube is purely an output display: user cannot play/pause YT directly.
   // Playback is strictly governed by our app's play/pause button.
@@ -209,6 +121,94 @@ export default function YouTubePlayer({
       }, 800);
     }
   }, [isReady, currentTrack?.id]);
+
+  const initPlayer = useCallback(() => {
+    if (playerRef.current || !containerRef.current) return;
+
+    playerRef.current = new window.YT.Player(containerRef.current, {
+      height: '100%',
+      width: '100%',
+      videoId: currentTrack?.id || '',
+      playerVars: {
+        autoplay: 1,
+        controls: 0, // Custom collaborative controls only
+        disablekb: 1,
+        enablejsapi: 1,
+        fs: 0,
+        modestbranding: 1,
+        rel: 0,
+        origin: window.location.origin,
+        playsinline: 1, // Important for mobile
+        iv_load_policy: 3, // Disable video annotations
+        autohide: 1
+      },
+      events: {
+        onReady: (event) => {
+          setIsReady(true);
+          event.target.setVolume(volume);
+          if (isMuted) event.target.mute();
+
+          // Disable pointer events on the iframe so users cannot interact with YT directly
+          try {
+            const iframe = event.target.getIframe();
+            if (iframe) {
+              iframe.style.pointerEvents = 'none';
+              iframe.setAttribute('tabindex', '-1');
+            }
+          } catch (e) {
+            console.debug('Iframe style setup:', e);
+          }
+
+          // Sync initial state
+          if (currentTrack?.id) {
+            syncPlayerState(isPlaying, playbackPosition);
+          }
+        },
+        onStateChange: handlePlayerStateChange,
+        onError: (e) => {
+          console.warn('YouTube Player Error:', e.data);
+          // If video unavailable/restricted, notify and skip to next
+          if (e.data === 150 || e.data === 101 || e.data === 100) {
+            console.log('Restricted video, auto-skipping...');
+            const entryId = currentTrack?.entryId;
+            if (entryId && lastEndedEntryIdRef.current !== entryId) {
+              lastEndedEntryIdRef.current = entryId;
+              socket.emit('player:skip', { entryId });
+            }
+          }
+        }
+      }
+    });
+  }, [currentTrack?.id, currentTrack?.entryId, volume, isMuted, isPlaying, playbackPosition, syncPlayerState, handlePlayerStateChange]);
+
+  // Load YouTube IFrame API
+  useEffect(() => {
+    if (window.YT && window.YT.Player) {
+      initPlayer();
+      return;
+    }
+
+    if (!document.getElementById('yt-iframe-api')) {
+      const tag = document.createElement('script');
+      tag.id = 'yt-iframe-api';
+      tag.src = 'https://www.youtube.com/iframe_api';
+      const firstScriptTag = document.getElementsByTagName('script')[0];
+      firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+    }
+
+    const previousReady = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      if (previousReady) previousReady();
+      initPlayer();
+    };
+
+    return () => {
+      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
+        playerRef.current.destroy();
+        playerRef.current = null;
+      }
+    };
+  }, [initPlayer]);
 
   // Change video when currentTrack changes
   useEffect(() => {

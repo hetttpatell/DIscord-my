@@ -1,379 +1,612 @@
-import React, { useState, useEffect } from 'react';
-import Navbar from './components/Navbar';
-import CommonScreen from './components/CommonScreen';
-import JoinCreateModal from './components/JoinCreateModal';
-import MediaDebugPanel from './components/MediaDebugPanel';
-import socket, { getBackendUrl } from './services/socket';
+import React, { useState, useEffect, useCallback } from 'react';
+import socket from './services/socket';
 import { getClientId } from './services/clientId';
 import mediaController from './services/mediaController';
-import { Radio } from 'lucide-react';
-
-function getSessionId() {
-  let sid = sessionStorage.getItem('togetherTune_sessionId');
-  if (!sid) {
-    sid = `sess-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    sessionStorage.setItem('togetherTune_sessionId', sid);
-  }
-  return sid;
-}
+import peerConnectionService from './services/peerConnectionService';
+import livekitService from './services/livekitService';
+import { useWebRTC } from './hooks/useWebRTC';
+import YouTubePlayer from './components/YouTubePlayer';
+import YouTubeSearchSheet from './components/YouTubeSearchSheet';
+import YouTubeQueue from './components/YouTubeQueue';
+import MembersStrip from './components/MembersStrip';
+import AudioControls from './components/AudioControls';
+import RoomTopBar from './components/RoomTopBar';
+import PlaybackOverlay from './components/PlaybackOverlay';
+import VoiceActionBar from './components/VoiceActionBar';
+import LandingAccessCard from './components/LandingAccessCard';
+import StartListeningGate from './components/StartListeningGate';
+import MicPermissionModal from './components/MicPermissionModal';
+import HeadphoneTip from './components/HeadphoneTip';
+import RemoteAudioLayer from './components/RemoteAudioLayer';
+import InsecureContextBanner from './components/InsecureContextBanner';
+import MediaDebugPanel from './components/MediaDebugPanel';
 
 export default function App() {
-  // Room & User State
   const [room, setRoom] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
-  const [initialRoomId, setInitialRoomId] = useState('');
-
-  // Player State
+  const [members, setMembers] = useState([]);
+  const [queue, setQueue] = useState([]);
   const [currentTrack, setCurrentTrack] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackPosition, setPlaybackPosition] = useState(0);
+  const [duration, setDuration] = useState(0);
 
-  // Members & Waiting List
-  const [members, setMembers] = useState([]);
-  const [waitingList, setWaitingList] = useState([]);
-
-  // Queue & Room Chat
-  const [queue, setQueue] = useState([]);
-  const [chatMessages, setChatMessages] = useState([]);
-  const [floatingReactions, setFloatingReactions] = useState([]);
-
-  // Local Audio Settings
-  const [volume, setVolume] = useState(() => {
-    const saved = localStorage.getItem('togetherTune_volume');
-    return saved !== null ? parseInt(saved, 10) : 80;
+  // Audio & Voice States
+  const [micState, setMicState] = useState(() => mediaController.micState);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [musicVolume, setMusicVolume] = useState(() => {
+    if (typeof window === 'undefined') return 80;
+    try {
+      const v = localStorage.getItem('afterspot_music_vol');
+      return v !== null ? Number(v) : 80;
+    } catch {
+      return 80;
+    }
   });
-  const [isMuted, setIsMuted] = useState(false);
-
-  // YouTube API Key & Guide Toggle
-  const [apiKey, setApiKey] = useState(() => {
-    return localStorage.getItem('togetherTune_ytApiKey') || '';
+  const [voicesVolume, setVoicesVolume] = useState(() => {
+    if (typeof window === 'undefined') return 100;
+    try {
+      const v = localStorage.getItem('afterspot_voices_vol');
+      return v !== null ? Number(v) : 100;
+    } catch {
+      return 100;
+    }
   });
-  const [showApiKeyGuide, setShowApiKeyGuide] = useState(false);
 
-  // Toast notifications
+  const [hasAudioUnlocked, setHasAudioUnlocked] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const [isMicModalOpen, setIsMicModalOpen] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+
   const [toast, setToast] = useState(null);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const showToast = (message) => {
-    setToast({ message, id: Date.now() });
+  // Host-only stored plain password for this tab session
+  const [hostPassword, setHostPassword] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      return sessionStorage.getItem('afterspot_hostPassword') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  // Join / Create form inputs
+  const [roomIdInput, setRoomIdInput] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    const params = new URLSearchParams(window.location.search);
+    return (params.get('room') || '').toUpperCase();
+  });
+  const [passwordInput, setPasswordInput] = useState('');
+  const [userNameInput, setUserNameInput] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem('afterspot_userName') || '';
+  });
+  const [roomNameInput, setRoomNameInput] = useState('');
+  const [mode, setMode] = useState(() => {
+    if (typeof window === 'undefined') return 'join';
+    const params = new URLSearchParams(window.location.search);
+    return params.get('room') ? 'join' : 'create';
+  });
+
+  const isInviteMode = Boolean(typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('room'));
+
+  const showToast = useCallback((msg) => {
+    setToast(msg);
     setTimeout(() => {
-      setToast((curr) => (curr?.message === message ? null : curr));
+      setToast(curr => (curr === msg ? null : curr));
     }, 3000);
-  };
+  }, []);
 
-  const handleRoomJoined = (roomData, userData, resumeToken = null) => {
+  // WebRTC Audio Connection
+  useWebRTC({
+    roomId: room?.id,
+    userName: currentUser?.name,
+    sessionId: getClientId(),
+    localStream: mediaController.stream,
+    isCallActive: Boolean(room)
+  });
+
+  // Track mic changes & permission status
+  useEffect(() => {
+    const unsub = mediaController.subscribe((_event, payload, state) => {
+      const current = state || payload || mediaController.getState();
+      if (current) {
+        setMicState(current.micState);
+        setIsSpeaking(Boolean(current.isSpeaking));
+        if (current.micState === 'blocked') {
+          setIsMicModalOpen(true);
+        }
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const handleRoomJoined = useCallback((roomData, userData, resumeToken = null, plainPassword = null) => {
     setRoom(roomData);
     setCurrentUser(userData);
     setCurrentTrack(roomData.currentTrack || null);
     setIsPlaying(Boolean(roomData.isPlaying));
     setPlaybackPosition(roomData.playbackPosition || 0);
     setMembers(roomData.members || []);
-    setWaitingList(roomData.waitingList || []);
     setQueue(roomData.queue || []);
-    setChatMessages(roomData.chatMessages || []);
+    setErrorMsg('');
+    setIsReconnecting(false);
 
-    // Save active session with stable clientId and server-issued resumeToken (never store raw password)
-    const myClientId = getClientId();
+    const clientId = getClientId();
     let storedToken = resumeToken;
     if (!storedToken) {
       try {
-        const prev = JSON.parse(localStorage.getItem('togetherTune_activeSession') || '{}');
+        const prev = JSON.parse(sessionStorage.getItem('afterspot_activeSession') || '{}');
         if (prev.roomId === roomData.id && prev.resumeToken) {
           storedToken = prev.resumeToken;
         }
       } catch {}
     }
 
-    localStorage.setItem('togetherTune_activeSession', JSON.stringify({
-      roomId: roomData.id,
-      clientId: myClientId,
-      userName: userData.name,
-      isHost: Boolean(userData.isHost),
-      resumeToken: storedToken || null
-    }));
+    try {
+      sessionStorage.setItem('afterspot_activeSession', JSON.stringify({
+        roomId: roomData.id,
+        clientId,
+        userName: userData.name,
+        isHost: Boolean(userData.isHost),
+        resumeToken: storedToken || null
+      }));
+    } catch {}
+
+    if (userData.name) {
+      try {
+        localStorage.setItem('afterspot_userName', userData.name);
+      } catch {}
+    }
+
+    if (userData.isHost && plainPassword) {
+      setHostPassword(plainPassword);
+      try {
+        sessionStorage.setItem('afterspot_hostPassword', plainPassword);
+      } catch {}
+    }
 
     const newUrl = `${window.location.pathname}?room=${roomData.id}`;
     window.history.pushState({ path: newUrl }, '', newUrl);
+    showToast(`Joined: ${roomData.name || roomData.id}`);
+  }, [showToast]);
 
-    showToast(`Connected: ${roomData.name}`);
-  };
-
-  // Parse invite URL or restore active session on mount
+  // Auto-resume active session on refresh
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const roomParam = params.get('room');
-    if (roomParam) {
-      setInitialRoomId(roomParam.toUpperCase());
-    }
-
-    // Auto-resume active session after browser refresh or server restart
-    const savedSessionRaw = localStorage.getItem('togetherTune_activeSession');
-    if (savedSessionRaw) {
-      try {
-        const savedSession = JSON.parse(savedSessionRaw);
-        const myClientId = savedSession.clientId || getClientId();
-
-        if (savedSession.roomId) {
+    try {
+      const savedRaw = sessionStorage.getItem('afterspot_activeSession');
+      if (savedRaw) {
+        const saved = JSON.parse(savedRaw);
+        const clientId = saved.clientId || getClientId();
+        if (saved.roomId && saved.resumeToken) {
           socket.emit('room:resume', {
-            roomId: savedSession.roomId,
-            clientId: myClientId,
-            sessionId: myClientId,
-            userName: savedSession.userName,
-            resumeToken: savedSession.resumeToken
-          }, (response) => {
-            if (response && response.success) {
-              handleRoomJoined(response.room, response.user, response.resumeToken || savedSession.resumeToken);
+            roomId: saved.roomId,
+            clientId,
+            sessionId: clientId,
+            userName: saved.userName,
+            resumeToken: saved.resumeToken
+          }, (res) => {
+            if (res?.success) {
+              handleRoomJoined(res.room, res.user, res.resumeToken || saved.resumeToken);
             } else {
-              localStorage.removeItem('togetherTune_activeSession');
+              sessionStorage.removeItem('afterspot_activeSession');
             }
           });
         }
-      } catch (e) {
-        localStorage.removeItem('togetherTune_activeSession');
       }
+    } catch {
+      sessionStorage.removeItem('afterspot_activeSession');
     }
+  }, [handleRoomJoined]);
 
-    // Check if backend already has an API key
-    fetch(`${getBackendUrl()}/api/health`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.hasApiKey && !apiKey) {
-          setApiKey('CONFIGURED_ON_SERVER');
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  // Socket Events
+  // Socket event listeners and reconnection
   useEffect(() => {
-    const handlePlayerSync = ({ isPlaying: serverPlaying, playbackPosition: serverPos, triggeredBy }) => {
-      setIsPlaying(serverPlaying);
-      if (typeof serverPos === 'number') {
-        setPlaybackPosition(serverPos);
-      }
-      if (triggeredBy) {
-        showToast(`${triggeredBy} ${serverPlaying ? 'played' : 'paused'} playback`);
-      }
+    const onPlayerSync = ({ isPlaying: p, playbackPosition: pos }) => {
+      setIsPlaying(p);
+      if (typeof pos === 'number') setPlaybackPosition(pos);
     };
 
-    const handleTrackChange = ({ currentTrack: newTrack, isPlaying: newPlaying, playbackPosition: newPos, triggeredBy }) => {
-      setCurrentTrack(newTrack);
-      setIsPlaying(Boolean(newPlaying));
-      setPlaybackPosition(newPos || 0);
-      if (newTrack) {
-        showToast(`Now playing: ${newTrack.title}`);
-      }
+    const onTrackChange = ({ currentTrack: t, isPlaying: p, playbackPosition: pos }) => {
+      setCurrentTrack(t);
+      setIsPlaying(Boolean(p));
+      setPlaybackPosition(pos || 0);
+      if (t) showToast(`Now playing: ${t.title}`);
     };
 
-    const handlePlayerSeek = ({ playbackPosition: newPos, triggeredBy }) => {
-      setPlaybackPosition(newPos);
-      if (triggeredBy) {
-        showToast(`${triggeredBy} scrubbed playback`);
-      }
+    const onSeek = ({ playbackPosition: pos }) => {
+      if (typeof pos === 'number') setPlaybackPosition(pos);
     };
 
-    // Server periodic heartbeat — keeps all clients in perfect theater sync
-    const handleTimeSync = ({ playbackPosition: serverPos, isPlaying: serverPlaying }) => {
-      if (typeof serverPos === 'number') {
-        setPlaybackPosition(serverPos);
-      }
-      // Also enforce play state in case it drifted
-      setIsPlaying(serverPlaying);
+    const onTimeSync = ({ playbackPosition: pos, isPlaying: p }) => {
+      if (typeof pos === 'number') setPlaybackPosition(pos);
+      setIsPlaying(p);
     };
 
-    const handleMembersUpdated = ({ members: newMembers, waitingList: newWaiting }) => {
-      if (newMembers) setMembers(newMembers);
-      if (newWaiting) setWaitingList(newWaiting);
+    const onMembersUpdated = ({ members: m }) => {
+      if (m) setMembers(m);
     };
 
-    const handleWaitingListUpdated = ({ waitingList: newWaiting }) => {
-      if (newWaiting) {
-        setWaitingList(newWaiting);
-        if (newWaiting.length > 0) {
-          showToast(`${newWaiting.length} friend(s) in waiting list`);
-        }
-      }
+    const onQueueUpdated = ({ queue: q }) => {
+      if (q) setQueue(q);
     };
 
-    const handleQueueUpdated = ({ queue: newQueue, addedTrack }) => {
-      if (newQueue) setQueue(newQueue);
-      if (addedTrack) {
-        showToast(`Added to queue: ${addedTrack.title}`);
-      }
+    const onDisconnect = () => {
+      setIsReconnecting(true);
     };
 
-    const handleChatMessage = (msg) => {
-      setChatMessages(prev => [...prev.slice(-150), msg]);
-    };
-
-    const handleReactionReceived = (reaction) => {
-      const id = Date.now() + Math.random();
-      const left = Math.floor(Math.random() * 75) + 12;
-      setFloatingReactions(prev => [...prev.slice(-20), { ...reaction, id, left }]);
-      setTimeout(() => {
-        setFloatingReactions(prev => prev.filter(r => r.id !== id));
-      }, 2500);
-    };
-
-    const handleRoomNameUpdated = ({ name }) => {
-      setRoom(prev => prev ? ({ ...prev, name }) : null);
-      showToast(`Room renamed: ${name}`);
-    };
-
-    const handleUserUpdated = ({ user }) => {
-      setCurrentUser(user);
-      const raw = localStorage.getItem('togetherTune_activeSession');
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          parsed.userName = user.name;
-          localStorage.setItem('togetherTune_activeSession', JSON.stringify(parsed));
-        } catch (e) {}
-      }
-    };
-
-    socket.on('player:sync', handlePlayerSync);
-    socket.on('player:track-change', handleTrackChange);
-    socket.on('player:seek', handlePlayerSeek);
-    socket.on('player:time-sync', handleTimeSync);
-    socket.on('room:members-updated', handleMembersUpdated);
-    socket.on('room:waiting-list-updated', handleWaitingListUpdated);
-    socket.on('room:name-updated', handleRoomNameUpdated);
-    socket.on('user:updated', handleUserUpdated);
-    socket.on('queue:updated', handleQueueUpdated);
-    socket.on('chat:message', handleChatMessage);
-    socket.on('reaction:received', handleReactionReceived);
-
-    // Handle socket reconnection — automatically rejoin the room
-    const handleReconnect = () => {
-      const savedSessionRaw = localStorage.getItem('togetherTune_activeSession');
-      if (savedSessionRaw) {
-        try {
-          const savedSession = JSON.parse(savedSessionRaw);
-          const myClientId = savedSession.clientId || getClientId();
-          if (savedSession.roomId) {
+    const onConnect = () => {
+      setIsReconnecting(false);
+      try {
+        const savedRaw = sessionStorage.getItem('afterspot_activeSession');
+        if (savedRaw) {
+          const saved = JSON.parse(savedRaw);
+          const clientId = saved.clientId || getClientId();
+          if (saved.roomId && saved.resumeToken) {
             socket.emit('room:resume', {
-              roomId: savedSession.roomId,
-              clientId: myClientId,
-              sessionId: myClientId,
-              userName: savedSession.userName,
-              resumeToken: savedSession.resumeToken
-            }, (response) => {
-              if (response && response.success) {
-                handleRoomJoined(response.room, response.user, response.resumeToken || savedSession.resumeToken);
-              } else {
-                localStorage.removeItem('togetherTune_activeSession');
-                setRoom(null);
-                setCurrentUser(null);
+              roomId: saved.roomId,
+              clientId,
+              sessionId: clientId,
+              userName: saved.userName,
+              resumeToken: saved.resumeToken
+            }, (res) => {
+              if (res?.success) {
+                handleRoomJoined(res.room, res.user, res.resumeToken || saved.resumeToken);
               }
             });
           }
-        } catch (e) {}
-      }
+        }
+      } catch {}
     };
-    socket.on('connect', handleReconnect);
+
+    socket.on('player:sync', onPlayerSync);
+    socket.on('player:track-change', onTrackChange);
+    socket.on('player:seek', onSeek);
+    socket.on('player:time-sync', onTimeSync);
+    socket.on('room:members-updated', onMembersUpdated);
+    socket.on('queue:updated', onQueueUpdated);
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect', onConnect);
 
     return () => {
-      socket.off('player:sync', handlePlayerSync);
-      socket.off('player:track-change', handleTrackChange);
-      socket.off('player:seek', handlePlayerSeek);
-      socket.off('player:time-sync', handleTimeSync);
-      socket.off('room:members-updated', handleMembersUpdated);
-      socket.off('room:waiting-list-updated', handleWaitingListUpdated);
-      socket.off('room:name-updated', handleRoomNameUpdated);
-      socket.off('user:updated', handleUserUpdated);
-      socket.off('queue:updated', handleQueueUpdated);
-      socket.off('chat:message', handleChatMessage);
-      socket.off('reaction:received', handleReactionReceived);
-      socket.off('connect', handleReconnect);
+      socket.off('player:sync', onPlayerSync);
+      socket.off('player:track-change', onTrackChange);
+      socket.off('player:seek', onSeek);
+      socket.off('player:time-sync', onTimeSync);
+      socket.off('room:members-updated', onMembersUpdated);
+      socket.off('queue:updated', onQueueUpdated);
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect', onConnect);
     };
-  }, []);
+  }, [handleRoomJoined, showToast]);
 
-  const handleLeaveRoom = () => {
+  const handleStartListening = async () => {
+    try {
+      await peerConnectionService.unlockAudio();
+      await livekitService.startAudio();
+      document.querySelectorAll('audio').forEach(a => {
+        if (a.paused && a.srcObject) a.play().catch(() => {});
+      });
+      setHasAudioUnlocked(true);
+      showToast('Audio unlocked!');
+    } catch {
+      setHasAudioUnlocked(true);
+    }
+  };
+
+  const handleJoin = (e) => {
+    e.preventDefault();
+    if (!userNameInput.trim()) {
+      setErrorMsg('Please enter your display name.');
+      return;
+    }
+    if (!roomIdInput.trim()) {
+      setErrorMsg('Please enter a 6-character room code.');
+      return;
+    }
+    if (!passwordInput.trim() || passwordInput.trim().length < 4) {
+      setErrorMsg('Room password must be at least 4 characters.');
+      return;
+    }
+
+    setErrorMsg('');
+    socket.emit('room:join', {
+      roomId: roomIdInput.trim().toUpperCase(),
+      password: passwordInput.trim(),
+      userName: userNameInput.trim(),
+      clientId: getClientId(),
+      sessionId: getClientId()
+    }, (res) => {
+      if (res?.success) {
+        handleRoomJoined(res.room, res.user, res.resumeToken);
+      } else {
+        setErrorMsg(res?.message || 'Failed to join room.');
+      }
+    });
+  };
+
+  const handleCreate = (e) => {
+    e.preventDefault();
+    if (!userNameInput.trim()) {
+      setErrorMsg('Please enter your display name.');
+      return;
+    }
+    if (!passwordInput.trim() || passwordInput.trim().length < 4) {
+      setErrorMsg('Password must be at least 4 characters.');
+      return;
+    }
+
+    const plainPass = passwordInput.trim();
+    setErrorMsg('');
+    socket.emit('room:create', {
+      roomName: roomNameInput.trim() || 'Music Room',
+      password: plainPass,
+      userName: userNameInput.trim(),
+      clientId: getClientId(),
+      sessionId: getClientId()
+    }, (res) => {
+      if (res?.success) {
+        handleRoomJoined(res.room, res.user, res.resumeToken, plainPass);
+      } else {
+        setErrorMsg(res?.message || 'Failed to create room.');
+      }
+    });
+  };
+
+  const handleLeave = () => {
     mediaController.cleanupOnLeaveRoom();
     socket.emit('room:leave');
-    localStorage.removeItem('togetherTune_activeSession');
-    socket.disconnect();
-    socket.connect();
+    try {
+      sessionStorage.removeItem('afterspot_activeSession');
+      sessionStorage.removeItem('afterspot_hostPassword');
+    } catch {}
     setRoom(null);
     setCurrentUser(null);
     setCurrentTrack(null);
     setIsPlaying(false);
     setMembers([]);
-    setWaitingList([]);
     setQueue([]);
-    setChatMessages([]);
-    setFloatingReactions([]);
+    setHostPassword('');
+    setIsSearchOpen(false);
+    setIsQueueOpen(false);
+    setHasAudioUnlocked(false);
     window.history.pushState({}, '', window.location.pathname);
-    showToast('You left the room');
+    showToast('Left the room');
   };
 
-  const handleSaveApiKey = async (newKey) => {
-    setApiKey(newKey);
-    localStorage.setItem('togetherTune_ytApiKey', newKey);
+  const handleCopyInvite = () => {
+    if (!room?.id) return;
+    const link = `${window.location.origin}/?room=${room.id}`;
+    navigator.clipboard.writeText(link).then(() => {
+      showToast('Invite link copied! (Password is never in the URL)');
+    }).catch(() => {
+      showToast('Could not copy link to clipboard');
+    });
+  };
 
-    // Also persist to backend .env
+  const handleCopyPassword = () => {
+    if (!hostPassword) {
+      showToast('Host password unavailable');
+      return;
+    }
+    navigator.clipboard.writeText(hostPassword).then(() => {
+      showToast('Room password copied to clipboard!');
+    }).catch(() => {
+      showToast('Could not copy password to clipboard');
+    });
+  };
+
+  const handleTogglePlay = () => {
+    if (!room) return;
+    socket.emit('player:sync', { isPlaying: !isPlaying, playbackPosition });
+  };
+
+  const handleSkip = () => {
+    if (!room) return;
+    socket.emit('queue:skip', { entryId: currentTrack?.entryId });
+  };
+
+  const handleSeek = (pos) => {
+    setPlaybackPosition(pos);
+    socket.emit('player:seek', { currentTime: pos });
+  };
+
+  const handlePlayNow = (track) => {
+    setIsSearchOpen(false);
+    socket.emit('player:set-track', { track });
+    showToast(`Playing: ${track.title}`);
+  };
+
+  const handleAddToQueue = (track) => {
+    setIsSearchOpen(false);
+    socket.emit('queue:add', { track });
+    showToast(`Added to queue: ${track.title}`);
+  };
+
+  const handleRemoveFromQueue = (entryId) => {
+    socket.emit('queue:remove', { entryId });
+  };
+
+  const handlePlayTrackFromQueue = (track) => {
+    socket.emit('player:set-track', { track });
+  };
+
+  const handleToggleMic = async () => {
     try {
-      await fetch('/api/youtube/save-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: newKey })
-      });
-    } catch (e) {}
-
-    showToast('YouTube API Key saved successfully!');
+      await mediaController.toggleMic();
+    } catch {
+      setIsMicModalOpen(true);
+    }
   };
 
+  const handleMusicVolumeChange = (newVol) => {
+    setMusicVolume(newVol);
+    try { localStorage.setItem('afterspot_music_vol', String(newVol)); } catch {}
+  };
+
+  const handleVoicesVolumeChange = (newVol) => {
+    setVoicesVolume(newVol);
+    try { localStorage.setItem('afterspot_voices_vol', String(newVol)); } catch {}
+  };
+
+  const isRoomActive = Boolean(room);
   const isHost = Boolean(currentUser?.isHost);
 
   return (
-    <div className="fixed inset-0 h-full h-[100dvh] w-full bg-[#1e1f22] text-[#dbdee1] flex flex-col antialiased overflow-hidden overscroll-none select-none">
-      {/* Live Media Diagnostics Panel (?debug=1) */}
+    <div className="min-h-screen bg-[#0B0B10] text-[#F4F1EA] flex flex-col font-sans select-none antialiased">
+      <InsecureContextBanner />
       <MediaDebugPanel />
+      <RemoteAudioLayer voicesVolume={voicesVolume} />
 
-      {/* Toast Alert */}
-      {toast && (
-        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 animate-fade-in pointer-events-none">
-          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#111214]/90 backdrop-blur-md border border-[#3f4147] text-[#f2f3f5] text-xs font-semibold shadow-2xl">
-            <Radio className="w-3.5 h-3.5 text-[#5865f2] animate-pulse" />
-            <span>{toast.message}</span>
-          </div>
+      {/* Mic Permission Guidance Modal */}
+      <MicPermissionModal
+        isOpen={isMicModalOpen}
+        onClose={() => setIsMicModalOpen(false)}
+        onRetry={async () => {
+          setIsMicModalOpen(false);
+          await mediaController.enableMic();
+        }}
+      />
+
+      {/* YouTube Search Sheet (Touch-friendly & Visual Viewport Adapted) */}
+      <YouTubeSearchSheet
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+        onPlayNow={handlePlayNow}
+        onAddToQueue={handleAddToQueue}
+      />
+
+      {/* Start Listening Autoplay Gate */}
+      <StartListeningGate
+        isVisible={isRoomActive && !hasAudioUnlocked}
+        onUnlock={handleStartListening}
+      />
+
+      {/* Reconnection Banner */}
+      {isReconnecting && (
+        <div className="fixed top-2 left-1/2 -translate-x-1/2 z-50 px-4 py-1.5 bg-[#FF9F1C] text-black text-xs font-bold rounded-full shadow-2xl animate-pulse">
+          Reconnecting to room...
         </div>
       )}
 
-      {/* Main Body */}
-      {room ? (
-        <main className="flex-1 w-full h-full overflow-hidden flex flex-col">
-          <CommonScreen
-            room={room}
-            currentUser={currentUser}
-            currentTrack={currentTrack}
-            isPlaying={isPlaying}
-            playbackPosition={playbackPosition}
-            members={members}
-            waitingList={waitingList}
-            queue={queue}
-            chatMessages={chatMessages}
-            floatingReactions={floatingReactions}
-            isHost={isHost}
-            hasApiKey={Boolean(apiKey)}
-            apiKey={apiKey === 'CONFIGURED_ON_SERVER' ? '' : apiKey}
-            onSaveApiKey={handleSaveApiKey}
-            showApiKeyGuide={showApiKeyGuide}
-            onToggleApiKeyGuide={() => setShowApiKeyGuide(prev => !prev)}
-            onCloseApiKeyGuide={() => setShowApiKeyGuide(false)}
-            onLeaveRoom={handleLeaveRoom}
-            volume={volume}
-            setVolume={setVolume}
-            isMuted={isMuted}
-            setIsMuted={setIsMuted}
-          />
-        </main>
-      ) : (
-        /* Create or Join Entry Modal */
-        <JoinCreateModal
-          onRoomJoined={handleRoomJoined}
-          initialRoomId={initialRoomId}
+      {/* Toast Notification */}
+      {toast && (
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-[#1C1C24]/90 backdrop-blur-md border border-white/20 rounded-full text-xs font-medium text-white shadow-xl">
+          {toast}
+        </div>
+      )}
+
+      {/* Permanent YouTube Player Container - Rule 4: never unmounts, never display:none */}
+      <div className={`transition-all duration-300 ${
+        isRoomActive && currentTrack
+          ? 'w-full max-w-2xl mx-auto aspect-video min-h-[200px] p-3 sm:p-4'
+          : 'fixed -top-[9999px] -left-[9999px] w-[320px] h-[180px] opacity-0 pointer-events-none'
+      }`}>
+        <YouTubePlayer
+          currentTrack={currentTrack}
+          isPlaying={isPlaying}
+          playbackPosition={playbackPosition}
+          volume={musicVolume}
+          isMuted={false}
+          onDurationChange={(d) => setDuration(d)}
+          onCurrentTimeChange={(pos) => setPlaybackPosition(pos)}
+          onPlayerError={(msg) => showToast(msg || "That video can't be played here, skipped")}
+          onTapToPlayNeeded={() => showToast('Tap player to resume playback')}
         />
+      </div>
+
+      {/* Main View Area */}
+      {isRoomActive ? (
+        <div className="flex-1 flex flex-col h-full overflow-hidden">
+          {/* Top Bar */}
+          <RoomTopBar
+            roomName={room.name}
+            roomId={room.id}
+            membersCount={members.length}
+            isHost={isHost}
+            hasHostPassword={Boolean(hostPassword)}
+            onCopyInvite={handleCopyInvite}
+            onCopyPassword={handleCopyPassword}
+            onLeaveRoom={handleLeave}
+          />
+
+          {/* Room Body */}
+          <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6">
+            <div className="w-full max-w-2xl mx-auto space-y-4">
+              <HeadphoneTip />
+
+              {/* Minimalist Playback Overlay with scrub */}
+              <PlaybackOverlay
+                currentTrack={currentTrack}
+                isPlaying={isPlaying}
+                playbackPosition={playbackPosition}
+                duration={duration}
+                onTogglePlay={handleTogglePlay}
+                onSkip={handleSkip}
+                onSeek={handleSeek}
+              />
+
+              {/* Voice Action Bar: prominent mic toggle, search button, queue toggle */}
+              <VoiceActionBar
+                micState={micState}
+                isSpeaking={isSpeaking}
+                queueCount={queue.length}
+                onToggleMic={handleToggleMic}
+                onOpenSearch={() => setIsSearchOpen(true)}
+                onToggleQueue={() => setIsQueueOpen(prev => !prev)}
+                isQueueOpen={isQueueOpen}
+              />
+
+              {/* Members Strip */}
+              <MembersStrip
+                members={members}
+                currentUserId={currentUser?.clientId || getClientId()}
+                localMicOn={micState === 'on'}
+                localSpeaking={isSpeaking}
+              />
+
+              {/* Audio Balance Dual Sliders */}
+              <AudioControls
+                musicVolume={musicVolume}
+                voicesVolume={voicesVolume}
+                onMusicVolumeChange={handleMusicVolumeChange}
+                onVoicesVolumeChange={handleVoicesVolumeChange}
+              />
+
+              {/* Up Next Queue (Slide-over / Collapsible Panel) */}
+              {isQueueOpen && (
+                <YouTubeQueue
+                  queue={queue}
+                  currentTrack={currentTrack}
+                  onRemoveTrack={handleRemoveFromQueue}
+                  onPlayTrack={handlePlayTrackFromQueue}
+                  onSkip={handleSkip}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Landing & Access Screens */
+        <div className="flex-1 flex items-center justify-center p-4">
+          <LandingAccessCard
+            mode={mode}
+            onModeChange={setMode}
+            userNameInput={userNameInput}
+            onUserNameChange={setUserNameInput}
+            roomIdInput={roomIdInput}
+            onRoomIdChange={setRoomIdInput}
+            roomNameInput={roomNameInput}
+            onRoomNameChange={setRoomNameInput}
+            passwordInput={passwordInput}
+            onPasswordChange={setPasswordInput}
+            onSubmitJoin={handleJoin}
+            onSubmitCreate={handleCreate}
+            errorMessage={errorMsg}
+            isInviteMode={isInviteMode}
+          />
+        </div>
       )}
     </div>
   );

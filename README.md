@@ -1,69 +1,100 @@
-# afterspot 🎵 — Real-Time Shared Watch Party & Music Platform
+# afterspot 🎵
 
-**afterspot** is a modern Discord-inspired collaborative web platform that lets friends watch videos and listen to music together in real-time through private shared rooms. Every member in the room watches and listens on a synchronized stage, joins low-latency WebRTC voice and video calls, shares a collaborative queue, and can react and chat live.
+> **Listen together. In sync. On mic. That's it.**
 
----
-
-## 🌟 Key Features
-
-### 1. 👥 Private Rooms & Easy Invites
-- **Create Rooms**: Set a custom Room Name, Host Name, custom Room ID (or auto-generated), and optional Password.
-- **1-Click Invite Links**: Share `http://localhost:5173/?room=ROOM_ID` with friends. When they open the link, the Room ID is automatically populated.
-- **Password Protection**: Restrict private rooms so only friends with the passcode can join.
-
-### 2. 📺 Synchronized Common Screen
-- **Real-Time Synchronization**: Play, pause, scrub, skip, or change songs—every action reflects instantly across all friends' screens.
-- **Dual View Modes**:
-  - **Vinyl Visualizer Mode**: Displays spinning vinyl record with album art, ambient aura, animated equalizer, track metadata, and who queued it.
-  - **Video Stream Mode**: Full YouTube video player embed for synchronized watch parties.
-- **Drift Correction**: Automatic background time-alignment ensures no listener falls behind.
-- **Theater Fullscreen**: 1-click fullscreen mode for shared party screens.
-- **Individual Volume Control**: Each friend controls their own volume and mute toggle locally without affecting others.
-
-### 3. 🎶 Collaborative Queue System
-- Any friend can search and add songs to the common room queue.
-- Shows who added each track (e.g., *"Queued by Alex"*).
-- Instant "Play Now" action and track removal.
-- Automatic queue progression: when a track finishes, the room moves to the next queued song in sync.
-
-### 4. 🔑 YouTube Search & API Key Guide
-- **YouTube Data API v3**: Configure a free YouTube API key to search the entire YouTube catalog in real time.
-- **Dedicated Setup Modal**: Includes a built-in step-by-step guide with links to Google Cloud Console and an instant **"Test Key"** validator.
-- **Zero-Key Alternatives**:
-  - **Direct Link / Video ID Paste**: Paste any YouTube link (e.g. `https://youtu.be/...`)—it fetches details and plays with 0 keys required.
-  - **Curated Music**: Pre-loaded instant Lo-Fi, Synthwave, Chillhop, Pop, and Rock tracks ready to play immediately.
-
-### 5. 💬 Social & DJ Controls
-- **Live Floating Emoji Reactions**: Click 🔥, ❤️, 🎧, 🕺, 👏, 🚀 to send animated floating reactions that float across everyone's common screen!
-- **Room Chat**: Real-time room messaging to discuss tracks.
-- **DJ Mode**: Host can toggle "Host DJ Mode" to restrict play/pause/skip controls exclusively to the host.
-- **Active Friends List**: Color-coded member avatars with host crown indicators.
+**afterspot** is a lean, real-time shared listening platform where members watch YouTube in sync while talking over low-latency, mic-only voice communication.
 
 ---
 
-## 🚀 Getting Started
+## 🌟 The Product
 
-### 1. Start Development Server
-Both the backend WebSocket synchronization server and Vite frontend run simultaneously:
+1. **Shared YouTube Stage & Up Next Queue**
+   - Search the YouTube catalog with rate-limited server caching and embeddability filters (`videoEmbeddable=true`, `videoSyndicated=true`).
+   - Paste any YouTube URL (`youtube.com/watch?v=...`, `youtu.be/...`, `music.youtube.com/...`, shorts) for zero-search-quota direct resolution.
+   - Synchronized playback across all room members with automatic drift correction.
+   - Persistent iframe architecture: the YouTube player remains mounted once in the DOM tree and never unmounts, reparents, or hides via `display: none` when navigating sheets or queues.
+   - Autoplay protection: handles mobile browser autoplay blocks with an initial tap gate and a responsive "Tap to play" fallback overlay.
+   - Idempotent queue progression: skip and track-end events use unique `entryId` markers to prevent double-skips under concurrent network requests.
+   - Automatic skipping of unplayable videos (player error codes 2, 5, 100, 101, 150) with room toast notifications.
+
+2. **Mic-Only Voice Communication**
+   - High-quality audio-only communication (echo cancellation, noise suppression, automatic gain control).
+   - LiveKit SFU as primary engine with automatic fallback to native WebRTC mesh (sendrecv audio transceivers, zero renegotiation needed on mid-call unmute).
+   - Microphone starts OFF by default; acquired via user gesture on first unmute.
+   - Real-time speaking indicators and persistent audio elements.
+   - Automatic music ducking: lowers YouTube player volume to 30% after 250ms of sustained remote speech, restoring volume after 600ms of silence (bypassed on iOS where volume is hardware-restricted).
+   - Dual volume sliders for independent "Music" and "Voices" balance.
+
+3. **Secure Room Access & Resilience**
+   - 6-character room codes generated from an unambiguous alphabet (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`).
+   - Constant-time `scrypt` password hashing and verification.
+   - Shareable invite links (`https://afterspot.vercel.app/?room=<ROOM_ID>`) containing only the Room ID—passwords are never embedded in URLs.
+   - Rate limiting: maximum 5 failed password attempts per 10 minutes per client.
+   - Maximum capacity of 12 members per room.
+   - Per-tab client identity and SHA-256 hashed resume tokens for seamless auto-rejoin across page reloads and server restarts.
+   - Redis persistence with automatic in-memory fallback.
+
+---
+
+## 🛠 Tech Stack
+
+- **Frontend**: React 19, Vite 8, Tailwind CSS v4, Lucide Icons.
+- **Backend**: Node.js, Express 5, Socket.IO 4, ioredis.
+- **Voice Engine**: LiveKit Client / Server SDK + Native WebRTC Mesh (STUN/TURN).
+- **Tooling**: Oxlint, Node Test Runner (`node:test`).
+
+---
+
+## ⚙️ Environment Variables
+
+Copy `.env.example` to `.env` to configure your environment. **Never commit `.env` or expose API keys.**
+
+| Variable | Description |
+| :--- | :--- |
+| `PORT` | Local backend server port (default: 3001). |
+| `VITE_BACKEND_URL` | Production backend URL for frontend requests. |
+| `YOUTUBE_API_KEY` | Google YouTube Data API v3 key for catalog search. |
+| `LIVEKIT_URL` | LiveKit SFU WebSocket URL (e.g. `wss://your-project.livekit.cloud`). |
+| `LIVEKIT_API_KEY` | LiveKit API Key. |
+| `LIVEKIT_API_SECRET` | LiveKit API Secret. |
+| `VITE_LIVEKIT_URL` | Optional frontend fallback URL for LiveKit WebSocket. |
+| `STUN_SERVERS` | Comma-separated list of custom STUN servers. |
+| `METERED_API_KEY` | Optional Metered.ca TURN relay API key. |
+| `METERED_APP_DOMAIN` | Optional Metered.ca app domain. |
+| `TURN_URLS` | Comma-separated custom TURN relay URLs. |
+| `TURN_USERNAME` | Custom TURN username. |
+| `TURN_CREDENTIAL` | Custom TURN password/credential. |
+| `TURN_SECRET` | Coturn RFC 5766 HMAC-SHA1 shared secret. |
+| `REDIS_URL` | Optional Redis connection string for persistent room state. |
+
+---
+
+## 🚀 Development & Testing
+
+### Installation
+```bash
+npm install
+```
+
+### Run Locally (Client + Server)
 ```bash
 npm run dev
 ```
-- **Frontend**: [http://localhost:5173](http://localhost:5173)
-- **Backend API & WebSockets**: [http://localhost:3001](http://localhost:3001)
+- Frontend: `http://localhost:5173`
+- Backend: `http://localhost:3001`
 
-### 2. How to Test Multi-User Listening Locally
-1. Open [http://localhost:5173](http://localhost:5173) in your primary browser window.
-2. Click **"Create Room"**, choose a nickname (e.g., *Alex*), and click **Create Room**.
-3. Click the **"Invite Friends"** button in the top navigation bar to copy the room link.
-4. Open an Incognito / Private window (or a different browser) and paste the link.
-5. Enter a friend's nickname (e.g., *Sam*) and click **Join Shared Room**.
-6. Play, pause, scrub, add songs, or send reactions in either window—notice how both screens stay synchronized in real time!
+### Run Linting
+```bash
+npm run lint
+```
 
----
+### Run Build
+```bash
+npm run build
+```
 
-## 🔑 How to Get a Free YouTube API Key
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (e.g. `TogetherTune`).
-3. In **APIs & Services > Library**, search for **YouTube Data API v3** and click **Enable**.
-4. In **APIs & Services > Credentials**, click **+ Create Credentials > API Key**.
-5. Copy your key, open TogetherTune, click **YouTube API** in the header, paste it, and click **Test Key** & **Save**!
+### Run Automated Unit Tests
+```bash
+npm test
+```
+Runs tests covering room model, password verification, rate limiting, token resumption, YouTube URL extraction, search caching, error mapping, and voice participant store.

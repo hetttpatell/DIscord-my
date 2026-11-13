@@ -1,161 +1,53 @@
 # Changelog & Quality Assurance Guide
 
-All notable improvements and architectural hardening applied to **afterspot** (TogetherTune).
+All notable improvements, architectural simplifications, and redesigns applied to **afterspot**.
 
 ---
 
-## Changes by Phase
+## Redesign & Radical Simplification (Phases 0 – 6)
 
-### Phase 1: Track-End Race Mitigation
-- **Files Modified**: `server.js`, `src/components/YouTubePlayer.jsx`, `src/components/CommonScreen.jsx`
-- **Changes**:
-  - Assigned unique `entryId = crypto.randomUUID()` to every queue item upon addition (`queue:add`, `player:set-track`, `queue:play-now`, `advanceQueue`).
-  - Added strict payload verification in `advanceQueue`: server drops requests unless `payload.entryId === room.currentTrack?.entryId`.
-  - Added `lastEndedEntryIdRef` guard in `YouTubePlayer.jsx` ensuring `player:track-end` and `player:skip` fire at most once per `entryId`.
-  - Passed `{ entryId: currentTrack?.entryId }` from `CommonScreen.jsx` during manual skips.
+### Phase 0: Audit & Deprecation Mapping
+- Identified and cataloged all legacy components, services, and socket events outside the new 3-pillar product definition (Shared YouTube Stage, Voice Mic, and Secure Room Access).
+- Marked 21 legacy components, layouts, assets, and tests for immediate teardown.
+- Outlined end-to-end mobile touch requirements, URL resolution paths, and embeddability constraints for YouTube playback.
 
-### Phase 2: Permanent YouTube DOM Mounting
-- **Files Modified**: `src/components/VideoCallGrid.jsx`, `src/components/CommonScreen.jsx`
-- **Changes**:
-  - Removed conditional mounting branches around `{children}` in `VideoCallGrid.jsx`; rendered `{children}` exactly once at a persistent position in the JSX tree.
-  - Implemented CSS-only layout transitions: full stage container in theater mode (`w-full h-full relative`) and fixed mini-dock (`fixed bottom-20 right-4 z-40 w-48 sm:w-64 md:w-72 aspect-video rounded-xl shadow-2xl border border-[#3c4043] bg-black`) in grid, spotlight, and screen-share modes.
-  - In `CommonScreen.jsx`, mounted `<YouTubePlayer>` unconditionally, applying `w-[1px] h-[1px] opacity-0 overflow-hidden pointer-events-none absolute` when no track is loaded to avoid unmounting or reparenting the iframe.
+### Phase 1: Teardown & Scope Elimination
+- **Deleted Front-End Components**: `ApiKeyModal.jsx`, `CallControls.jsx`, `CommonScreen.jsx`, `JoinCreateModal.jsx`, `KeyboardShortcutsModal.jsx`, `MeetingLobby.jsx`, `MeetingSettingsModal.jsx`, `MeetingSidePanel.jsx`, `MeetingToasts.jsx`, `MembersAndChat.jsx`, `Navbar.jsx`, `QueuePanel.jsx`, `SearchModal.jsx`, `VideoCallGrid.jsx`, `VideoTile.jsx`, `computeLayout.js`, `computeLayout.test.js`, `App.css`, and legacy image assets.
+- **Removed Dead Socket Events in `server.js`**: Stripped `chat:*`, `reaction:*`, `participant:hand-raise`, `room:approve-*`, `room:reject-user`, `host:*`, `settings:update`, and WebRTC video track signaling.
+- **Pure Audio Media Services**: Reduced `mediaService.js`, `mediaController.js`, `useLocalMedia.js`, `peerConnectionService.js`, `livekitService.js`, and `useWebRTC.js` strictly to audio constraints and transceivers (`video: false`).
+- **Dependencies**: Uninstalled unused `canvas-confetti` package. Cleaned `.env.example`.
 
-### Phase 3: Persistent Remote Audio Layer
-- **Files Modified**: `src/components/RemoteAudioLayer.jsx` (New), `src/components/CommonScreen.jsx`, `src/components/VideoTile.jsx`, `src/components/VideoCallGrid.jsx`, `src/services/livekitService.js`, `src/components/MeetingLobby.jsx`, `src/components/JoinCreateModal.jsx`
-- **Changes**:
-  - Created standalone `RemoteAudioLayer` component outside `VideoCallGrid`, rendering dedicated `<audio autoPlay playsInline>` elements per remote participant in a fixed offscreen container (`w-[1px] h-[1px] opacity-0 pointer-events-none`).
-  - Removed all audio playback elements from `VideoTile.jsx` and enforced `muted={true}` on all `<video>` tags to eliminate duplicate playback and autoplay blocks during layout toggles.
-  - Added `AudioUnlockBanner` with one-time `pointerdown` recovery on browser autoplay rejection.
-  - Added user gesture hooks `peerConnectionService.unlockAudio()` and `livekitService.startAudio()` on Join/Create buttons; handled LiveKit `RoomEvent.AudioPlaybackStatusChanged`.
+### Phase 2: Room Model & Access Hardening
+- **6-Character IDs**: Implemented `generateRoomId()` using unambiguous alphabet `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`.
+- **Password Protection**: Mandatory password verification using `node:crypto` `scrypt` hashing with constant-time `crypto.timingSafeEqual`.
+- **Rate Limiting**: Enforced rate limit of 5 failed password attempts per 10 minutes per client per room, returning wait-time calculations.
+- **Room Capacity**: Enforced 12-member maximum capacity per room.
+- **Per-Tab Identity & Token Resumption**: Implemented tab-scoped client IDs via `sessionStorage` and random cryptographic SHA-256 `resumeToken`s for zero-interruption reconnection across page reloads and server restarts.
+- **Invite Security**: "Copy Invite" exports `https://afterspot.vercel.app/?room=<ID>` without password; "Copy Password" is restricted to the host.
+- **Storage**: Sanitized public room serialization preventing password/token leakage to clients or logs.
 
-### Phase 4: Environment & Startup Hygiene
-- **Files Modified**: `.env`, `.gitignore`, `server.js`
-- **Changes**:
-  - Corrected malformed orphan assignment line in `.env` (`BACKEND_URL=`).
-  - Verified `.env` is tracked in `.gitignore`.
-  - Added non-sensitive startup diagnostics in `server.js` validating `PORT` and reporting active services (LiveKit SFU, TURN Relays, YouTube API) without exposing secret keys.
-  - *Note*: External YouTube Data API key must be restricted via Google Cloud Console to authorized domains / IP ranges.
+### Phase 3: Synchronized YouTube Player & Mobile Touch Fixes
+- **Mobile Autoplay Handling**: Added entry "Tap to start listening" activation gate and 2.5-second fallback overlay ("Tap to play") when background autoplay is rejected.
+- **Embeddability Filters**: Added `videoEmbeddable=true` and `videoSyndicated=true` to YouTube Data API queries; handled YouTube player error codes `2`, `5`, `100`, `101`, and `150` via idempotent auto-skip with room toast notifications.
+- **Mobile Touch UI**: Built `YouTubeSearchSheet.jsx` with `visualViewport` dynamic height (`dvh`), outside-pointerdown dismissal (no input blur dropouts), 16px minimum font size (preventing iOS auto-zoom), and ≥56px row touch targets.
+- **Quota & URL Paste Support**: Integrated server-side 10-minute query caching, 15 searches/min client rate limiting, and zero-quota direct URL extraction for `youtube.com`, `youtu.be`, `music.youtube.com`, and YouTube shorts.
+- **Idempotent Queue Synchronization**: Synchronized queue progression via `entryId` verification on server and client, eliminating duplicate-skip race conditions.
 
-### Phase 5: LiveKit SFU as Primary Engine with Constrained WebRTC Mesh Fallback
-- **Files Modified**: `src/services/livekitService.js`, `src/services/mediaService.js`, `src/hooks/useWebRTC.js`, `src/services/peerConnectionService.js`, `src/components/YouTubePlayer.jsx`, `.env.example`
-- **Changes**:
-  - Configured LiveKit room connection with `adaptiveStream: true`, `dynacast: true`, and default capture resolution of 640x360 @ 24 fps.
-  - When LiveKit connects, bypassed instantiation of the native WebRTC mesh service in `useWebRTC.js`.
-  - In native mesh fallback (`peerConnectionService.js`), restricted video publishing to maximum 4 peers (peers $\ge 4$ forced to audio-only) and capped sender bitrate to ~400 kbps via `RTCRtpSender.setParameters`.
-  - Added automatic YouTube player quality downgrading (`player.setPlaybackQuality('medium')`) when $\ge 3$ active cameras are detected.
-  - Documented `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` in `.env.example`.
+### Phase 4: Voice Engine (Audio-Only)
+- **Engine Priority**: LiveKit SFU as primary engine with automatic fallback to native WebRTC mesh with STUN/TURN relays.
+- **Microphone Gesture Lifecycle**: Mic starts OFF by default; acquired via user gesture on first unmute (`echoCancellation`, `noiseSuppression`, `autoGainControl`). Unmute/mute operates via `track.enabled` without renegotiation.
+- **Persistent Audio Layer**: Dedicated `<audio>` elements mounted once in offscreen DOM tree (`RemoteAudioLayer.jsx`) with volume synchronization.
+- **Acoustic Ducking**: YouTube player volume drops to 30% when remote speech is sustained for 250ms, with 600ms release delay (bypassed on iOS).
+- **Controls & Guidance**: Created `MembersStrip.jsx` with live speaking pulse ring, `AudioControls.jsx` dual sliders ("Music" and "Voices"), `MicPermissionModal.jsx` for browser-specific permission resolution, and dismissible `HeadphoneTip.jsx`.
 
-### Phase 6: HTTPS & Reverse Proxy for Mobile LAN Testing
-- **Files Modified**: `vite.config.js`, `src/services/socket.js`, `src/components/InsecureContextBanner.jsx`, `package.json`
-- **Changes**:
-  - Added `@vitejs/plugin-basic-ssl` to Vite dev server, configured `server.host: true`, and proxied `/socket.io` (with `ws: true`) and `/api` to backend `http://localhost:3001` to eliminate mixed-content errors on LAN devices.
-  - Updated socket client `getBackendUrl()` in dev to connect same-origin (`window.location.origin`) through Vite reverse proxy; preserved production direct URL logic.
-  - Updated `InsecureContextBanner.jsx` to check `window.isSecureContext` and recommend `cloudflared tunnel` as an alternative for mobile development.
+### Phase 5: UI Redesign & Aesthetic Polish
+- **Design Tokens**: Applied warm dark palette (`#0B0B10` background, `#141419` surface, `#1C1C24` stroke, `#F4F1EA` high-contrast text, `#9A978F` secondary text, `#FF9F1C` to `#FF5A5F` gradient accents, `#2EC4B6` emerald indicators).
+- **Typography**: Integrated `Bricolage Grotesque` for display/room codes and `Inter` for clean body typography.
+- **Landing Screen**: Distraction-free access card with "Join" / "Create" tabs and automatic invite URL parameter recognition.
+- **Room Interface**: Sticky `RoomTopBar`, centered 16:9 responsive YouTube stage with `PlaybackOverlay`, `MembersStrip`, and docked `VoiceActionBar`.
+- **Permanent Mount**: Ensured `<YouTubePlayer>` is mounted exactly once in a fixed position, changing only positioning and CSS classes to preserve playback across sheet and drawer transitions.
 
-### Phase 7: Mobile Audio, Acoustic Echo Mitigation & Audio Ducking
-- **Files Modified**: `src/services/mediaService.js`, `src/hooks/useLocalMedia.js`, `src/components/VideoCallGrid.jsx`, `src/components/YouTubePlayer.jsx`, `src/components/CallControls.jsx`
-- **Changes**:
-  - Enforced `echoCancellation: true`, `noiseSuppression: true`, and `autoGainControl: true` across all getUserMedia constraint tiers.
-  - Configured `navigator.audioSession.type = 'play-and-record'` on iOS Safari to maintain balanced duplex audio during playback.
-  - Added default muted state when a room track is actively playing upon user join.
-  - Implemented automatic YouTube audio ducking: lowers music volume when any participant speaks (detected via local/remote RMS analyzers) and restores volume with a 600 ms release delay.
-  - Added one-time dismissible desktop headphones advisory banner in `CallControls.jsx` triggered when no headphone output device is detected via `devicechange`.
-  - *Platform Notice*: Mobile hardware acoustic echo cancellation varies across device chipsets. Audio ducking, AEC constraints, and muted-on-join provide software mitigation; headphones are still strongly recommended on mobile for complete echo elimination.
-
-### Phase 8: Room State Persistence & Auto-Rejoin
-- **Files Modified**: `server/roomStore.js` (New), `server.js`, `src/App.jsx`, `src/components/JoinCreateModal.jsx`, `.env.example`, `package.json`
-- **Changes**:
-  - Implemented `server/roomStore.js` with Redis support (via `ioredis`) and in-memory fallback if `REDIS_URL` is unset.
-  - Debounced storage writes by 250 ms after room mutations (`player:play`, `pause`, `seek`, `set-track`, `queue:add`, `queue:play-now`, `queue:remove`, `advanceQueue`, `room:update-name`).
-  - Configured 24-hour TTL (`EX 86400`) on persisted room state.
-  - Rehydrated all stored rooms on server startup (`loadAllRooms()`).
-  - Hashed room passwords using `scrypt` from `node:crypto` and verified with constant-time `crypto.timingSafeEqual`.
-  - Updated client `App.jsx` and `JoinCreateModal.jsx` to store active session credentials and auto-rejoin/resume rooms seamlessly upon socket reconnection, surviving server restarts mid-song.
-
-### Audit & Hardening Post-Pass
-- **Files Modified**: `src/components/JoinCreateModal.jsx`, `src/components/InsecureContextBanner.jsx`, `src/components/YouTubePlayer.jsx`, `src/components/VideoCallGrid.jsx`, `src/components/RemoteAudioLayer.jsx`, `src/services/clientId.js` (New), `scripts/verify-queue.mjs` (New)
-- **Changes**:
-  - Defined missing `handleEnableMic` in `JoinCreateModal.jsx` to eliminate `Uncaught ReferenceError: handleEnableMic is not defined` during audio permission prompts.
-  - Resolved Temporal Dead Zone (TDZ) initialization ordering in `VideoCallGrid.jsx`, `App.jsx`, and `YouTubePlayer.jsx` eliminating `Uncaught ReferenceError: Cannot access 'Le' before initialization`.
-  - Hardened YouTube volume ducking to trigger only on remote participant speech (`remoteIsSpeaking`), never on local mic input.
-  - Restricted volume ducking on iOS devices where `setVolume` has no effect.
-  - Removed deprecated `setPlaybackQuality('medium')`.
-  - Adjusted mini-dock styling to be at least 200px high on desktop (~356px wide at 16:9) and max viewport width minus 2rem on mobile.
-  - Generated and stored persistent `clientId` in `localStorage` to key `room.hostId` across restarts.
-  - Replaced stored raw room password with server-issued random `resumeToken`s (SHA-256 hashed on server).
-  - Updated tunnel command in `InsecureContextBanner.jsx` to `cloudflared tunnel --url https://localhost:5173 --no-tls-verify`.
-  - Verified LiveKit audio uniqueness in `RemoteAudioLayer.jsx` preventing duplicate `<audio>` elements.
-  - Created automated concurrency verification test `scripts/verify-queue.mjs` (4 duplicate track-ends simulated; asserted exactly 1 advance accepted).
-
-### Mobile Media & Hardware Lifecycle Hardening
-- **Diagnostic Hypotheses (Unverified)**:
-  - *Gesture-token expiration*: The theory that mobile browsers expired transient user-activation tokens across asynchronous setup calls before invoking `getUserMedia` is an unverified hypothesis, not a confirmed cause.
-  - *Errors produced on the phone*: The specific list of error codes reported on mobile devices (`NotAllowedError`, `NotFoundError`, `NotReadableError`, `OverconstrainedError`, `SecurityError`) are unverified hypotheses regarding actual device behavior, not confirmed causes.
-- **Files Modified**: `src/services/mediaService.js`, `src/components/MediaDebugPanel.jsx` (New), `src/components/MeetingLobby.jsx`, `src/components/InsecureContextBanner.jsx`, `src/services/peerConnectionService.js`, `src/services/livekitService.js`, `src/hooks/useLocalMedia.js`, `src/hooks/useWebRTC.js`, `src/components/VideoTile.jsx`, `src/App.jsx`
-- **Factual Code Changes**:
-  - Implemented live `MediaDebugPanel` activated with `?debug=1` tracking permissions, security context, last getUserMedia error, local track settings, and WebRTC sender stats.
-  - Mapped specific error codes (`NotAllowedError`, `NotFoundError`, `NotReadableError`, `OverconstrainedError`, and `InsecureContextError`) with in-context user guidance and an immediate "Retry" button.
-  - Wrapped `navigator.mediaDevices.getUserMedia` so an undefined `mediaDevices` throws `InsecureContextError` mapped directly to `InsecureContextBanner`.
-  - Eliminated preliminary async awaits before `callGetUserMedia` calls to invoke media acquisition immediately on user interaction.
-  - Enforced ideal-only video constraint fallback chain (`640x360@24fps (max 30)` -> `facingMode` -> bare video) avoiding overconstraint errors on mobile sensors.
-  - Added permissions query `onchange` listeners to auto-acquire tracks upon permission grant in browser settings.
-  - Implemented mobile lifecycle listeners on `visibilitychange` and `window.focus` guarded against permission denials, throttled to 1 attempt per 3 seconds, and stopped after 3 consecutive failures until the user taps Retry.
-  - Hardened camera publishing in mesh by updating transceivers and triggering renegotiation, and updated `applyVideoBitrateCap` to check for non-empty encodings.
-  - Enhanced `VideoTile.jsx` to retry playback on `loadedmetadata` and log diagnostic warnings when video tracks exist but avatars are displayed.
-
----
-
-## Manual QA Verification Checklist
-
-### 1. 4-Tab Queue Race Condition Test
-- [ ] Open 4 browser tabs (Incognito or multiple browser profiles) and join the same room.
-- [ ] Add 3 videos to the queue.
-- [ ] Let Track 1 play to the end, or double-click "Skip Track" in quick succession in Tab 1.
-- [ ] **Expected Result**: The queue advances exactly one track forward across all 4 tabs. No track is skipped twice, and all 4 tabs play the identical next song in sync.
-
-### 2. Layout Switch Audio & Video Test
-- [ ] Start playing a YouTube video in Theater Mode.
-- [ ] Click the layout switcher in call controls to toggle between Theater Mode and Grid Mode.
-- [ ] Toggle into Spotlight / Pinned mode and Screen Share mode.
-- [ ] **Expected Result**:
-  - YouTube video transitions into the fixed bottom-right mini-dock without stopping, reloading, buffering, or desyncing.
-  - No iframe reload or YouTube unmount occurs.
-  - Remote participants' audio remains clear and uninterrupted during all layout transitions.
-
-### 3. iOS Safari & Android Chrome Audio Test
-- [ ] Connect a mobile device (iPhone on Safari or Android on Chrome) to the dev server via HTTPS LAN IP or Cloudflare Tunnel.
-- [ ] Join a room with an actively playing YouTube track.
-- [ ] **Expected Result**:
-  - Microphone starts muted by default to prevent instant feedback.
-  - Unmuting microphone does not mute or crash YouTube playback.
-  - On iOS Safari, `navigator.audioSession` prevents call audio from routing entirely to ear-speaker or muting media.
-  - When a participant speaks, YouTube volume ducks smoothly and returns to normal 600 ms after speaking stops.
-
-### 4. 6-User LiveKit SFU vs Mesh Test
-- [ ] **LiveKit Path** (with `LIVEKIT_URL` set):
-  - Join 6 participants. Verify adaptive stream dynacast and simulcast function with low CPU usage.
-- [ ] **WebRTC Mesh Path** (without `LIVEKIT_URL`):
-  - Join 6 participants in native WebRTC mesh.
-  - Verify that the first 4 video peers publish video, and 5th/6th peers are capped to audio-only.
-  - Verify bitrate is capped at ~400 kbps per sender.
-  - Verify YouTube player quality switches to `medium` when 3+ cameras are active.
-
-### 5. LAN HTTPS Dev Test
-- [ ] Start dev server with `npm run dev`.
-- [ ] Note HTTPS URL in terminal (e.g., `https://192.168.x.x:5173`).
-- [ ] Navigate to the URL on a mobile device on the same local Wi-Fi.
-- [ ] Accept self-signed certificate.
-- [ ] **Expected Result**:
-  - `window.isSecureContext` is `true`.
-  - No mixed content errors (WebSocket and API calls are proxied over HTTPS/WSS through Vite).
-  - Browser prompts for camera and microphone permissions normally.
-
-### 6. Server Restart Mid-Song Test
-- [ ] In a room with 2 or more clients, play a song to approximately 1:30.
-- [ ] In the terminal running the server, stop the server process (`Ctrl+C`) and restart it (`npm start` or `node server.js`).
-- [ ] **Expected Result**:
-  - Clients detect socket disconnect and show reconnect state.
-  - Within ~2 seconds after the server restarts, clients auto-rejoin the room using stored credentials.
-  - Room name, host status, queue, and playback position (at ~1:30) resume automatically without manual re-entry.
-
+### Phase 6: Verification, Cleanup & QA
+- **Zero Warnings/Errors**: Oxlint clean (0 warnings, 0 errors), Vite production build clean, 21 unit tests passing across all test suites.
+- **Deleted Feature Purge**: Removed all dead code, unused socket events, unused variables, and deprecated feature references.
+- **Documentation**: Overhauled `README.md` and `CHANGELOG.md` with up-to-date specifications and manual verification checklists.

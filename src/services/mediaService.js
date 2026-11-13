@@ -1,19 +1,16 @@
 /**
- * Centralized Media Management Service
- * Provides robust, cross-platform audio & video track lifecycle management
+ * Centralized Audio Media Management Service
+ * Provides robust, cross-platform audio track lifecycle management
  * for Chrome Desktop, Chrome Android, iOS Safari, and Edge.
  */
 
 class MediaService {
   constructor() {
     this.localStream = null;
-    this.facingMode = 'user'; // 'user' (front) | 'environment' (back)
-    this.selectedCameraId = null;
     this.selectedMicId = null;
     this.selectedSpeakerId = null;
 
     this.isMicOn = false;
-    this.isCameraOn = false;
     this.isSpeaking = false;
 
     this.lastError = null;
@@ -50,16 +47,13 @@ class MediaService {
   }
 
   /**
-   * Universal getUserMedia wrapper supporting standard & legacy browser APIs
-   */
-  /**
    * Universal getUserMedia wrapper
    * Throws custom InsecureContextError when mediaDevices is undefined or context is insecure
    */
   async callGetUserMedia(constraints) {
     try {
       if (typeof window !== 'undefined' && !window.isSecureContext) {
-        const err = new Error('Insecure context: Camera and microphone require HTTPS or localhost.');
+        const err = new Error('Insecure context: Microphone requires HTTPS or localhost.');
         err.name = 'InsecureContextError';
         throw err;
       }
@@ -104,8 +98,6 @@ class MediaService {
     return {
       stream: this.localStream,
       isMicOn: this.isMicOn,
-      isCameraOn: this.isCameraOn,
-      facingMode: this.facingMode,
       isSpeaking: this.isSpeaking,
       lastError: this.lastError,
       isSecureContext: typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false
@@ -119,32 +111,33 @@ class MediaService {
     if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
       try {
         const res = await navigator.permissions.query({ name: 'microphone' });
-        return res.state; // 'granted' | 'prompt' | 'denied'
-      } catch { }
+        return res.state; // 'granted' | 'denied' | 'prompt'
+      } catch {
+        return 'unknown';
+      }
     }
-    return null;
+    return 'unknown';
   }
 
   /**
-   * Enumerate available cameras and microphones
+   * Enumerate available microphones and audio outputs
    */
   async enumerateDevices() {
-    if (!navigator?.mediaDevices?.enumerateDevices) return { audioInputs: [], videoInputs: [] };
+    if (!navigator?.mediaDevices?.enumerateDevices) return { audioInputs: [], audioOutputs: [] };
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       return {
         audioInputs: devices.filter(d => d.kind === 'audioinput'),
-        videoInputs: devices.filter(d => d.kind === 'videoinput')
+        audioOutputs: devices.filter(d => d.kind === 'audiooutput')
       };
-    } catch (e) {
-      console.warn('[MediaService] enumerateDevices error:', e);
-      return { audioInputs: [], videoInputs: [] };
+    } catch {
+      return { audioInputs: [], audioOutputs: [] };
     }
   }
 
   /**
    * Acquire microphone audio track with progressive constraints fallback.
-   * Directly called inside user click/tap handlers; never blocked by async work.
+   * Only uses ideal constraints, never exact.
    */
   async acquireAudioTrack(initialMuted = false) {
     this.lastError = null;
@@ -239,91 +232,9 @@ class MediaService {
   }
 
   /**
-   * Acquire camera video track with progressive constraints fallback.
-   * Ideal values only: 640x360@24fps (max 30) -> facingMode -> bare video.
-   */
-  async acquireVideoTrack(targetFacing = this.facingMode) {
-    this.lastError = null;
-    this.facingMode = targetFacing || 'user';
-
-    // Stop and remove existing video tracks
-    if (this.localStream) {
-      this.localStream.getVideoTracks().forEach(t => {
-        try { t.stop(); } catch { }
-        this.localStream.removeTrack(t);
-      });
-    }
-
-    // Constraints fallback chain using ideal values only (never exact)
-    const constraintTiers = [
-      {
-        video: {
-          ...(this.selectedCameraId ? { deviceId: { ideal: this.selectedCameraId } } : { facingMode: this.facingMode }),
-          width: { ideal: 640 },
-          height: { ideal: 360 },
-          frameRate: { ideal: 24, max: 30 }
-        },
-        audio: false
-      },
-      {
-        video: {
-          ...(this.selectedCameraId ? { deviceId: { ideal: this.selectedCameraId } } : { facingMode: this.facingMode })
-        },
-        audio: false
-      },
-      {
-        video: true,
-        audio: false
-      }
-    ];
-
-    let videoStream = null;
-    let lastVideoErr = null;
-
-    for (const constraints of constraintTiers) {
-      try {
-        videoStream = await this.callGetUserMedia(constraints);
-        if (videoStream && videoStream.getVideoTracks().length > 0) {
-          break;
-        }
-      } catch (err) {
-        lastVideoErr = err;
-        console.debug('[MediaService] Video constraint tier failed, falling back:', err.name);
-      }
-    }
-
-    if (!videoStream || videoStream.getVideoTracks().length === 0) {
-      console.warn('[MediaService] All video constraint tiers failed');
-      this.isCameraOn = false;
-      this.lastError = this.parseMediaError(lastVideoErr || new Error('No camera input'), 'video');
-      this.notify('error', this.lastError);
-      this.notify('state-changed', { isCameraOn: false });
-      return null;
-    }
-
-    const newVideoTrack = videoStream.getVideoTracks()[0];
-    newVideoTrack.enabled = true;
-    this.isCameraOn = true;
-
-    this.bindTrackEvents(newVideoTrack, 'video');
-
-    if (!this.localStream) {
-      this.localStream = new MediaStream([newVideoTrack]);
-    } else {
-      this.localStream.addTrack(newVideoTrack);
-    }
-
-    this.notify('stream-changed', { stream: this.localStream, track: newVideoTrack, kind: 'video' });
-    this.notify('state-changed', { isCameraOn: true, facingMode: this.facingMode });
-    return newVideoTrack;
-  }
-
-  /**
-   * Monitor track lifecycle events (ended, mute, unmute)
+   * Bind event listeners to MediaStreamTrack (mute, unmute, ended)
    */
   bindTrackEvents(track, kind) {
-    if (!track) return;
-
     let muteTimer = null;
 
     const onMute = () => {
@@ -331,7 +242,7 @@ class MediaService {
       this.notify('track-muted', { track, kind });
       if (muteTimer) clearTimeout(muteTimer);
       muteTimer = setTimeout(async () => {
-        if (track.muted && ((kind === 'audio' && this.isMicOn) || (kind === 'video' && this.isCameraOn))) {
+        if (track.muted && kind === 'audio' && this.isMicOn) {
           console.warn(`[MediaService] ${kind} track muted for >1s, auto-reacquiring...`);
           await this.reacquireTrack(kind);
         }
@@ -352,10 +263,8 @@ class MediaService {
       if (muteTimer) clearTimeout(muteTimer);
       if (kind === 'audio') {
         this.isMicOn = false;
-      } else {
-        this.isCameraOn = false;
       }
-      this.notify('state-changed', { isMicOn: this.isMicOn, isCameraOn: this.isCameraOn });
+      this.notify('state-changed', { isMicOn: this.isMicOn });
     };
 
     track.addEventListener('mute', onMute);
@@ -364,9 +273,9 @@ class MediaService {
   }
 
   /**
-   * Re-acquire track on system interruption and notify subscribers to replace on senders
+   * Re-acquire audio track on system interruption and notify subscribers to replace on senders
    */
-  async reacquireTrack(kind) {
+  async reacquireTrack(kind = 'audio') {
     if (kind === 'audio') {
       const oldTrack = this.localStream?.getAudioTracks()[0];
       const newTrack = await this.acquireAudioTrack(!this.isMicOn);
@@ -374,14 +283,8 @@ class MediaService {
         this.notify('track-replaced', { oldTrack, newTrack, kind: 'audio' });
       }
       return newTrack;
-    } else if (kind === 'video') {
-      const oldTrack = this.localStream?.getVideoTracks()[0];
-      const newTrack = await this.acquireVideoTrack(this.facingMode);
-      if (newTrack) {
-        this.notify('track-replaced', { oldTrack, newTrack, kind: 'video' });
-      }
-      return newTrack;
     }
+    return null;
   }
 
   /**
@@ -398,6 +301,16 @@ class MediaService {
       });
     }
     this.notify('audio-output-changed', { deviceId });
+  }
+
+  /**
+   * Set preferred microphone device ID
+   */
+  async setAudioInput(deviceId) {
+    this.selectedMicId = deviceId || null;
+    if (this.isMicOn) {
+      await this.acquireAudioTrack(false);
+    }
   }
 
   /**
@@ -424,25 +337,6 @@ class MediaService {
         }
       };
     } catch {}
-
-    try {
-      const camStatus = await navigator.permissions.query({ name: 'camera' });
-      camStatus.onchange = () => {
-        if (camStatus.state === 'granted') {
-          if (this.lastError?.name === 'NotAllowedError' || this.lastError?.type === 'PERMISSION_DENIED') {
-            this.lastError = null;
-          }
-          if (this.lastGetUserMediaError?.name === 'NotAllowedError') {
-            this.lastGetUserMediaError = null;
-          }
-          this.resetReacquireGuard();
-          if (!this.isCameraOn) {
-            console.debug('[MediaService] Camera permission granted via settings, auto-acquiring...');
-            this.acquireVideoTrack().catch(() => {});
-          }
-        }
-      };
-    } catch {}
   }
 
   /**
@@ -454,9 +348,9 @@ class MediaService {
   }
 
   /**
-   * Check if permission is explicitly denied for a given device type
+   * Check if permission is explicitly denied for microphone
    */
-  async isPermissionDenied(name) {
+  async isPermissionDenied(name = 'microphone') {
     if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
       try {
         const res = await navigator.permissions.query({ name });
@@ -470,133 +364,65 @@ class MediaService {
 
   /**
    * Handle mobile app switcher / screen lock lifecycle
-   * Guarded against permission denials, throttled to 1 attempt per 3s,
-   * and stopped after 3 consecutive failures until user taps Retry.
    */
   setupMobileLifecycleListeners() {
-    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    if (typeof document === 'undefined') return;
 
-    const checkTracks = async () => {
+    const onResume = async () => {
       if (document.visibilityState !== 'visible') return;
 
       const audioTrack = this.localStream?.getAudioTracks()[0];
       const needsAudio = this.isMicOn && (!audioTrack || audioTrack.readyState === 'ended' || audioTrack.muted);
 
-      const videoTrack = this.localStream?.getVideoTracks()[0];
-      const needsVideo = this.isCameraOn && (!videoTrack || videoTrack.readyState === 'ended' || videoTrack.muted);
-
-      if (!needsAudio && !needsVideo) {
+      if (!needsAudio) {
+        this.resetReacquireGuard();
         return;
       }
 
-      // Check current permission state: skip if 'denied'
-      let skipAudio = false;
-      let skipVideo = false;
-
-      if (needsAudio) {
-        const isDenied = await this.isPermissionDenied('microphone');
-        if (isDenied) skipAudio = true;
-      }
-      if (needsVideo) {
-        const isDenied = await this.isPermissionDenied('camera');
-        if (isDenied) skipVideo = true;
-      }
-
-      const shouldReacquireAudio = needsAudio && !skipAudio;
-      const shouldReacquireVideo = needsVideo && !skipVideo;
-
-      if (!shouldReacquireAudio && !shouldReacquireVideo) {
+      // Check explicit permission denial before re-requesting
+      const isDenied = await this.isPermissionDenied('microphone');
+      if (isDenied) {
+        console.debug('[MediaService] Lifecycle check: Mic permission denied, aborting re-acquire.');
         return;
       }
 
-      // If 'granted' or 'prompt', or Permissions API is unavailable, continue to throttle & cap
+      // Rate limit re-acquisition: wait at least 3000ms between attempts
       const now = Date.now();
       if (now - this.lastReacquireAttemptAt < 3000) {
+        console.debug('[MediaService] Lifecycle check throttled (<3s since last attempt)');
         return;
       }
 
+      // Max 3 consecutive failures before requiring user manual intervention
       if (this.consecutiveReacquireFailures >= 3) {
+        console.warn('[MediaService] Reached max 3 consecutive re-acquire failures. User must tap Retry.');
+        this.notify('reacquire-blocked', { reason: 'max_failures_exceeded' });
         return;
       }
 
       this.lastReacquireAttemptAt = now;
-      let failed = false;
 
-      if (shouldReacquireAudio) {
+      try {
         console.debug('[MediaService] Lifecycle check: Re-acquiring audio track...');
         const newTrack = await this.reacquireTrack('audio');
-        if (!newTrack) {
-          failed = true;
+        if (newTrack) {
+          this.consecutiveReacquireFailures = 0;
+        } else {
+          this.consecutiveReacquireFailures++;
         }
-      }
-
-      if (shouldReacquireVideo) {
-        console.debug('[MediaService] Lifecycle check: Re-acquiring video track...');
-        const newTrack = await this.reacquireTrack('video');
-        if (!newTrack) {
-          failed = true;
-        }
-      }
-
-      if (failed) {
+      } catch (err) {
         this.consecutiveReacquireFailures++;
-        console.debug(`[MediaService] Lifecycle re-acquisition failed (${this.consecutiveReacquireFailures}/3)`);
-      } else {
-        this.consecutiveReacquireFailures = 0;
+        console.error('[MediaService] Lifecycle re-acquire audio error:', err);
       }
     };
 
-    document.addEventListener('visibilitychange', checkTracks);
-    window.addEventListener('focus', checkTracks);
+    document.addEventListener('visibilitychange', onResume);
+    window.addEventListener('pageshow', onResume);
+    window.addEventListener('focus', onResume);
   }
 
   /**
-   * Flip camera front/back on mobile devices
-   */
-  async switchCamera() {
-    const nextFacing = this.facingMode === 'user' ? 'environment' : 'user';
-    return this.acquireVideoTrack(nextFacing);
-  }
-
-  /**
-   * Toggle Microphone on / off
-   */
-  async toggleMic() {
-    const audioTrack = this.localStream?.getAudioTracks().find(t => t.readyState === 'live');
-    if (!audioTrack) {
-      return this.acquireAudioTrack();
-    }
-
-    audioTrack.enabled = !audioTrack.enabled;
-    this.isMicOn = audioTrack.enabled;
-
-    this.notify('stream-changed', { stream: this.localStream, track: audioTrack, kind: 'audio' });
-    this.notify('state-changed', { isMicOn: this.isMicOn });
-    return audioTrack;
-  }
-
-  /**
-   * Toggle Camera on / off
-   */
-  async toggleCamera() {
-    if (this.isCameraOn) {
-      if (this.localStream) {
-        this.localStream.getVideoTracks().forEach(t => {
-          try { t.stop(); } catch { }
-          this.localStream.removeTrack(t);
-        });
-      }
-      this.isCameraOn = false;
-      this.notify('stream-changed', { stream: this.localStream, track: null, kind: 'video' });
-      this.notify('state-changed', { isCameraOn: false });
-      return null;
-    } else {
-      return this.acquireVideoTrack(this.facingMode);
-    }
-  }
-
-  /**
-   * Initialize Voice Activity Detection (Speaking Indicator)
+   * Web Audio API RMS Voice Activity Detector
    */
   initSpeakingDetector() {
     if (typeof window === 'undefined') return;
@@ -665,15 +491,15 @@ class MediaService {
   /**
    * Parse getUserMedia error to user-friendly messages
    */
-  parseMediaError(err, device) {
-    const name = err.name || '';
-    const msg = err.message || '';
+  parseMediaError(err, device = 'audio') {
+    const name = err?.name || '';
+    const msg = err?.message || '';
 
     if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
       return {
         type: 'PERMISSION_DENIED',
         name,
-        message: `${device === 'audio' ? 'Microphone' : 'Camera'} permission was denied. Please allow it in your site settings, then tap Retry.`,
+        message: 'Microphone permission was denied. Please allow it in your site settings, then tap Retry.',
         device
       };
     }
@@ -681,7 +507,7 @@ class MediaService {
       return {
         type: 'NOT_FOUND',
         name,
-        message: `No ${device === 'audio' ? 'microphone' : 'camera'} device found.`,
+        message: 'No microphone device found.',
         device
       };
     }
@@ -689,7 +515,7 @@ class MediaService {
       return {
         type: 'HARDWARE_IN_USE',
         name,
-        message: `The ${device === 'audio' ? 'microphone' : 'camera'} is in use by another app. Please close it and retry.`,
+        message: 'The microphone is in use by another app. Please close it and retry.',
         device
       };
     }
@@ -697,7 +523,7 @@ class MediaService {
       return {
         type: 'OVERCONSTRAINED',
         name,
-        message: '',
+        message: 'Audio constraints could not be satisfied by your microphone.',
         device
       };
     }
@@ -711,14 +537,14 @@ class MediaService {
       return {
         type: 'INSECURE_CONTEXT',
         name: 'InsecureContextError',
-        message: 'Insecure context: Camera and microphone require HTTPS or localhost.',
+        message: 'Insecure context: Microphone requires HTTPS or localhost.',
         device
       };
     }
     return {
       type: 'UNKNOWN',
       name: name || 'Error',
-      message: msg || `Unable to access ${device}.`,
+      message: msg || 'Unable to access microphone.',
       device
     };
   }
@@ -747,10 +573,9 @@ class MediaService {
     }
 
     this.isMicOn = false;
-    this.isCameraOn = false;
     this.isSpeaking = false;
     this.notify('stream-changed', { stream: null, track: null });
-    this.notify('state-changed', { isMicOn: false, isCameraOn: false, isSpeaking: false });
+    this.notify('state-changed', { isMicOn: false, isSpeaking: false });
   }
 }
 

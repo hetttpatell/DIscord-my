@@ -2,8 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import mediaController from '../services/mediaController';
 
 /**
- * React hook wrapping mediaController for reactive components.
- * Subscribes to the single application-wide mediaController state.
+ * React hook wrapping mediaController for audio microphone state and controls.
  */
 export function useLocalMedia() {
   const [mediaState, setMediaState] = useState(() => mediaController.getState());
@@ -32,32 +31,12 @@ export function useLocalMedia() {
     return mediaController.disableMic();
   }, []);
 
-  const toggleCamera = useCallback(async () => {
-    return mediaController.toggleCamera();
-  }, []);
-
-  const enableCamera = useCallback(async () => {
-    return mediaController.enableCamera();
-  }, []);
-
-  const disableCamera = useCallback(async () => {
-    return mediaController.disableCamera();
-  }, []);
-
-  const switchCamera = useCallback(async () => {
-    return mediaController.switchCamera();
-  }, []);
-
   const startAudio = useCallback(async (initialMuted = false) => {
     if (initialMuted) {
       await mediaController.disableMic();
       return mediaController.stream?.getAudioTracks().find(t => t.readyState === 'live') || null;
     }
     return mediaController.enableMic();
-  }, []);
-
-  const startVideo = useCallback(async () => {
-    return mediaController.enableCamera();
   }, []);
 
   const stopAll = useCallback(() => {
@@ -68,43 +47,33 @@ export function useLocalMedia() {
     return mediaController.setAudioInput(deviceId);
   }, []);
 
-  const setVideoInput = useCallback(async (deviceId) => {
-    return mediaController.setVideoInput(deviceId);
-  }, []);
-
   const setAudioOutput = useCallback((deviceId) => {
     mediaController.setAudioOutput(deviceId);
+  }, []);
+
+  const retryPermission = useCallback(async () => {
+    return mediaController.retryPermission();
   }, []);
 
   return {
     stream: mediaState?.stream || null,
     streamVersion,
     micState: mediaState?.micState || 'off',
-    cameraState: mediaState?.cameraState || 'off',
     isMicOn: Boolean(mediaState?.isMicOn),
-    isCameraOn: Boolean(mediaState?.isCameraOn),
-    facingMode: mediaState?.facingMode || 'user',
     isSpeaking: Boolean(mediaState?.isSpeaking),
     error: mediaState?.error || null,
     isSecureContext: Boolean(mediaState?.isSecureContext),
     isAudioMutedBySystem: Boolean(mediaState?.isAudioMutedBySystem),
-    isVideoMutedBySystem: Boolean(mediaState?.isVideoMutedBySystem),
     selectedMicId: mediaState?.selectedMicId || '',
-    selectedCameraId: mediaState?.selectedCameraId || '',
     selectedSpeakerId: mediaState?.selectedSpeakerId || '',
     toggleMic,
     enableMic,
     disableMic,
-    toggleCamera,
-    enableCamera,
-    disableCamera,
-    switchCamera,
     startAudio,
-    startVideo,
     stopAll,
     setAudioInput,
-    setVideoInput,
-    setAudioOutput
+    setAudioOutput,
+    retryPermission
   };
 }
 

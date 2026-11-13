@@ -1,8 +1,7 @@
 /**
  * PeerConnectionService
- * Manages WebRTC RTCPeerConnections using the W3C Perfect Negotiation Pattern.
- * Handles offer/answer exchange, glare resolution, candidate queueing,
- * track hot-swapping, ICE restarts, and connection stats.
+ * Manages WebRTC audio RTCPeerConnections using the W3C Perfect Negotiation Pattern.
+ * Audio-only mesh fallback with pre-allocated sendrecv transceivers.
  */
 
 import socket, { getBackendUrl } from './socket.js';
@@ -18,46 +17,6 @@ const DEFAULT_ICE_CONFIG = {
   iceCandidatePoolSize: 10
 };
 
-/**
- * Log provisioned ICE servers with credentials fully redacted behind ?debug=1
- */
-function logRedactedIceServers(iceServers) {
-  if (!isDebug()) return;
-  const list = (iceServers || []).map(entry => {
-    const rawUrls = Array.isArray(entry.urls) ? entry.urls : [entry.urls];
-    const schemes = rawUrls.map(u => {
-      const parts = u.split(':');
-      const scheme = parts[0];
-      const hasTcp = u.includes('transport=tcp') ? ' (tcp)' : '';
-      return `${scheme}${hasTcp}`;
-    });
-    return {
-      types: Array.from(new Set(schemes)).join(', '),
-      urls: rawUrls.map(u => u.replace(/:[^:@]+@/, ':***@')),
-      hasCredentials: Boolean(entry.username || entry.credential)
-    };
-  });
-  console.log('[webrtc][trace] Final iceServers provisioned (?debug=1):', list);
-}
-
-// Cap video sender bitrate to ~400kbps to protect client CPU and mesh bandwidth
-async function applyVideoBitrateCap(sender, maxBitrate = 400000) {
-  if (!sender || typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') return;
-  try {
-    let params = sender.getParameters();
-    if (!params || !params.encodings || params.encodings.length === 0) {
-      params = sender.getParameters();
-    }
-    if (!params || !params.encodings || params.encodings.length === 0) {
-      return; // Do not call setParameters if encodings array is empty
-    }
-    params.encodings[0].maxBitrate = maxBitrate;
-    await sender.setParameters(params);
-  } catch (err) {
-    console.debug('[WebRTC] setParameters maxBitrate error:', err);
-  }
-}
-
 export function isDebug() {
   if (typeof window === 'undefined') return false;
   try {
@@ -69,7 +28,7 @@ export function isDebug() {
 
 function traceLog(...args) {
   if (isDebug()) {
-    console.log('[trace]', ...args);
+    console.log('[webrtc][trace]', ...args);
   }
 }
 
@@ -83,19 +42,11 @@ class PeerConnectionService {
 
     this.listeners = new Set();
     this.remoteStreams = new Map(); // peerId -> MediaStream
-    this.peerMediaStates = new Map(); // peerId -> { isMuted, isCameraOff, isSpeaking, connectionQuality }
+    this.peerMediaStates = new Map(); // peerId -> { isMuted, isSpeaking, connectionQuality }
 
     this.audioContext = null;
     this.remoteAnalysers = new Map(); // peerId -> { analyser, interval }
-
     this.autoplayBlocked = false;
-
-    this.diagnosticsInfo = {
-      lastToggle: null,
-      lastMediaStateSent: null,
-      lastMediaStateReceived: null,
-      negotiationNeededCount: 0
-    };
   }
 
   subscribe(callback) {
@@ -107,111 +58,59 @@ class PeerConnectionService {
     this.listeners.forEach(cb => {
       try {
         cb(event, payload);
-      } catch (e) {
-        console.error('[WebRTC] Listener error:', e);
+      } catch (err) {
+        console.error('[WebRTC] Listener error:', err);
       }
     });
   }
 
-  /**
-   * Fetch dynamic STUN/TURN ICE configuration from backend with retry and backoff
-   */
-  async loadIceConfig(sessionId = 'guest') {
-    if (this.iceConfig) return this.iceConfig;
-
-    const maxAttempts = 3;
-    let lastError = null;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const url = `${getBackendUrl()}/api/webrtc/ice-servers?sessionId=${encodeURIComponent(sessionId)}`;
-        const res = await fetch(url);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && Array.isArray(data.iceServers) && data.iceServers.length > 0) {
-            this.iceConfig = data;
-            this.iceFetchError = null;
-            logRedactedIceServers(data.iceServers);
-            console.debug('[WebRTC] Loaded ICE servers from server:', data.iceServers.length);
-            return this.iceConfig;
-          }
-        }
-        throw new Error(`ICE config endpoint returned HTTP ${res.status}`);
-      } catch (err) {
-        lastError = err;
-        console.warn(`[WebRTC] ICE config fetch attempt ${attempt}/${maxAttempts} failed:`, err.message);
-        if (attempt < maxAttempts) {
-          await new Promise(r => setTimeout(r, attempt * 1000));
+  async fetchIceServers(sessionId) {
+    try {
+      const backendUrl = getBackendUrl();
+      const res = await fetch(`${backendUrl}/api/webrtc/ice-config?sessionId=${encodeURIComponent(sessionId || 'anon')}`);
+      if (res.ok) {
+        const config = await res.json();
+        if (config && config.iceServers) {
+          this.iceConfig = config;
+          return config;
         }
       }
+    } catch (err) {
+      console.warn('[WebRTC] Could not fetch dynamic ICE config from backend, using fallback:', err.message);
     }
-
-    console.error('[WebRTC] All ICE config fetch attempts failed. TURN relay is unavailable. Error:', lastError);
-    this.iceFetchError = lastError;
-    this.notify('ice-fetch-failed', { error: lastError });
     this.iceConfig = DEFAULT_ICE_CONFIG;
-    logRedactedIceServers(DEFAULT_ICE_CONFIG.iceServers);
-    return this.iceConfig;
+    return DEFAULT_ICE_CONFIG;
   }
 
-  /**
-   * Helper to log transceivers for debugging/tracing
-   */
-  logTransceivers(peerId, pc, context = '') {
-    if (!isDebug()) return;
-    const transceivers = (typeof pc.getTransceivers === 'function' ? pc.getTransceivers() : []).map(t => ({
-      mid: t.mid,
-      direction: t.direction,
-      currentDirection: t.currentDirection,
-      senderTrackKind: t.sender?.track?.kind || null,
-      receiverTrackKind: t.receiver?.track?.kind || null
-    }));
-    traceLog(`transceivers for peerId: ${peerId} [${context}]`, transceivers);
-  }
-
-  /**
-   * Join WebRTC Call in current room
-   */
-  async joinCall(localStream, initialMediaState = {}) {
+  async initiateCall({ localStream, sessionId = 'user', initialMediaState = {} }) {
     this.localStream = localStream;
     this.isCallActive = true;
-    await this.loadIceConfig();
 
+    await this.fetchIceServers(sessionId);
     this.bindSocketListeners();
 
-    const audioLive = localStream?.getAudioTracks().some(t => t.readyState === 'live' && t.enabled);
-    const videoLive = localStream?.getVideoTracks().some(t => t.readyState === 'live' && !t.muted && t.enabled);
+    const audioTrack = localStream?.getAudioTracks().find(t => t.readyState === 'live');
+    const audioLive = Boolean(audioTrack && audioTrack.enabled);
 
-    const initialMuted = initialMediaState.isMuted !== undefined ? Boolean(initialMediaState.isMuted) : !audioLive;
-    const initialCameraOff = initialMediaState.isCameraOff !== undefined ? Boolean(initialMediaState.isCameraOff) : !videoLive;
-    const isScreenSharing = Boolean(initialMediaState.isScreenSharing);
-
-    // Announce to room that we are joining the call
     socket.emit('webrtc:join-call', {
-      isMuted: initialMuted,
-      isCameraOff: initialCameraOff,
-      isScreenSharing
+      isMuted: initialMediaState.isMuted !== undefined ? Boolean(initialMediaState.isMuted) : !audioLive
     });
 
-    // Broadcast webrtc:media-state after join completes
-    this.sendMediaState({
-      isMuted: initialMuted,
-      isCameraOff: initialCameraOff,
-      isScreenSharing
-    });
-
-    console.debug('[WebRTC] Joined call with localStream:', localStream?.id);
+    console.log('[WebRTC] Initiated audio mesh call');
   }
 
-  /**
-   * Leave WebRTC Call and close all peer connections cleanly
-   */
   leaveCall() {
     this.isCallActive = false;
 
-    // Close all peer connections
     for (const [peerId, record] of this.peerConnections.entries()) {
-      this.closePeerConnection(peerId, record);
+      try {
+        if (record.statsInterval) clearInterval(record.statsInterval);
+        if (record.disconnectedTimeout) clearTimeout(record.disconnectedTimeout);
+        if (record.iceCheckingTimer) clearTimeout(record.iceCheckingTimer);
+        record.pc.close();
+      } catch (e) {
+        console.debug('[WebRTC] Error closing pc for peer', peerId, e);
+      }
     }
 
     this.peerConnections.clear();
@@ -219,14 +118,13 @@ class PeerConnectionService {
     this.remoteStreams.clear();
     this.peerMediaStates.clear();
 
-    // Clean up remote audio analysers
-    for (const remote of this.remoteAnalysers.values()) {
-      if (remote.interval) clearInterval(remote.interval);
+    for (const [, analyserData] of this.remoteAnalysers.entries()) {
+      if (analyserData.interval) clearInterval(analyserData.interval);
     }
     this.remoteAnalysers.clear();
 
     if (this.audioContext && this.audioContext.state !== 'closed') {
-      this.audioContext.close().catch(() => {});
+      try { this.audioContext.close(); } catch {}
       this.audioContext = null;
     }
 
@@ -237,393 +135,174 @@ class PeerConnectionService {
     console.debug('[WebRTC] Left call and cleaned up peer connections');
   }
 
-  /**
-   * Update local stream tracks across all active peer connections
-   */
   async updateLocalStream(newStream) {
     this.localStream = newStream;
     if (!this.isCallActive) return;
 
-    const tracks = newStream ? newStream.getTracks() : [];
-    const audioTrack = tracks.find(t => t.kind === 'audio' && t.readyState === 'live') || null;
-    const videoTrack = tracks.find(t => t.kind === 'video' && t.readyState === 'live') || null;
-
-    let peerIndex = 0;
-    const toggleSummary = [];
+    const audioTrack = newStream?.getAudioTracks().find(t => t.readyState === 'live') || null;
 
     for (const [peerId, record] of this.peerConnections.entries()) {
       const pc = record.pc;
       if (!pc || pc.signalingState === 'closed') continue;
 
-      const allowVideo = peerIndex < 4;
-      peerIndex++;
-
-      // Log transceivers at moment of toggle
-      const transceiversBefore = (typeof pc.getTransceivers === 'function' ? pc.getTransceivers() : []).map(t => ({
-        mid: t.mid,
-        direction: t.direction,
-        currentDirection: t.currentDirection,
-        senderTrackKind: t.sender?.track?.kind || null,
-        senderTrackReadyState: t.sender?.track?.readyState || null
-      }));
-
-      traceLog(`[toggle] Peer ${peerId} transceivers before update:`, transceiversBefore, `signalingState: ${pc.signalingState}`);
-
-      // Audio transceiver track replacement
       const audioTransceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
         (t.sender?.track?.kind === 'audio') || (t.receiver?.track?.kind === 'audio')
       ) : null;
 
-      let audioReplaceResolved = null;
-      if (audioTransceiver) {
-        if (audioTransceiver.sender.track !== audioTrack) {
-          try {
-            await audioTransceiver.sender.replaceTrack(audioTrack);
-            audioReplaceResolved = true;
-            traceLog(`[toggle] Audio replaceTrack resolved for peer ${peerId}`);
-          } catch (err) {
-            audioReplaceResolved = false;
-            console.warn('[WebRTC] Audio replaceTrack error:', err);
-          }
-        } else {
-          audioReplaceResolved = 'noop (same track)';
+      if (audioTransceiver && audioTransceiver.sender.track !== audioTrack) {
+        try {
+          await audioTransceiver.sender.replaceTrack(audioTrack);
+          traceLog(`Audio replaceTrack resolved for peer ${peerId}`);
+        } catch (err) {
+          console.warn('[WebRTC] Audio replaceTrack error:', err);
         }
       }
-
-      // Video transceiver track replacement
-      const videoTransceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
-        (t.sender?.track?.kind === 'video') || (t.receiver?.track?.kind === 'video')
-      ) : null;
-
-      let videoReplaceResolved = null;
-      if (videoTransceiver) {
-        const trackToSet = allowVideo ? videoTrack : null;
-        if (videoTransceiver.sender.track !== trackToSet) {
-          try {
-            await videoTransceiver.sender.replaceTrack(trackToSet);
-            videoReplaceResolved = true;
-            traceLog(`[toggle] Video replaceTrack resolved for peer ${peerId}`);
-            if (trackToSet) {
-              applyVideoBitrateCap(videoTransceiver.sender, 400000);
-            }
-          } catch (err) {
-            videoReplaceResolved = false;
-            console.warn('[WebRTC] Video replaceTrack error:', err);
-          }
-        } else {
-          videoReplaceResolved = 'noop (same track)';
-        }
-      }
-
-      toggleSummary.push({
-        peerId,
-        signalingState: pc.signalingState,
-        transceivers: transceiversBefore,
-        audioReplaceResolved,
-        videoReplaceResolved
-      });
     }
 
-    this.diagnosticsInfo.lastToggle = {
-      timestamp: new Date().toISOString(),
-      audioTrackKind: audioTrack?.kind || null,
-      audioTrackReadyState: audioTrack?.readyState || null,
-      videoTrackKind: videoTrack?.kind || null,
-      videoTrackReadyState: videoTrack?.readyState || null,
-      peers: toggleSummary
-    };
-
-    // Broadcast updated media state after local tracks are acquired or replaced
     const audioLive = Boolean(audioTrack && audioTrack.enabled);
-    const videoLive = Boolean(videoTrack && !videoTrack.muted && videoTrack.enabled);
     this.sendMediaState({
-      isMuted: !audioLive,
-      isCameraOff: !videoLive
+      isMuted: !audioLive
     });
   }
 
-  /**
-   * Renegotiate connection using Perfect Negotiation offer
-   */
-  async triggerRenegotiation(peerId, record) {
-    const pc = record.pc;
-    if (!pc || pc.signalingState !== 'stable' || record.makingOffer) return;
-    try {
-      record.makingOffer = true;
-      await pc.setLocalDescription();
-      socket.emit('webrtc:signal', {
-        to: peerId,
-        signal: pc.localDescription,
-        type: 'offer'
-      });
-    } catch (err) {
-      console.warn(`[WebRTC] Renegotiation error with ${peerId}:`, err);
-    } finally {
-      record.makingOffer = false;
-    }
-  }
-
-  /**
-   * Replace track across all active peer senders (e.g. on mobile lifecycle resume)
-   */
   async replaceLocalTrack(oldTrack, newTrack) {
-    this.localStream = mediaService.localStream;
+    this.localStream = newStream => newStream;
     const kind = newTrack?.kind || oldTrack?.kind;
-    if (!kind) return;
+    if (kind !== 'audio') return;
 
     for (const [peerId, record] of this.peerConnections.entries()) {
       const pc = record.pc;
       if (!pc || pc.signalingState === 'closed') continue;
 
       const transceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
-        (t.sender.track && (t.sender.track.id === oldTrack?.id || t.sender.track.kind === kind)) ||
-        (t.sender?.track?.kind === kind) ||
-        (t.receiver?.track && t.receiver.track.kind === kind)
+        (t.sender.track && t.sender.track.id === oldTrack?.id) ||
+        (t.sender?.track?.kind === 'audio') ||
+        (t.receiver?.track && t.receiver.track.kind === 'audio')
       ) : null;
 
       if (transceiver) {
         try {
           await transceiver.sender.replaceTrack(newTrack || null);
-          if (kind === 'video' && newTrack) {
-            applyVideoBitrateCap(transceiver.sender, 400000);
-          }
         } catch (err) {
           console.warn(`[WebRTC] replaceLocalTrack error on peer ${peerId}:`, err);
         }
       }
     }
 
-    // Broadcast updated media state after track replacement
     const audioLive = this.localStream?.getAudioTracks().some(t => t.readyState === 'live' && t.enabled);
-    const videoLive = this.localStream?.getVideoTracks().some(t => t.readyState === 'live' && !t.muted && t.enabled);
     this.sendMediaState({
-      isMuted: !audioLive,
-      isCameraOff: !videoLive
+      isMuted: !audioLive
     });
   }
 
-  /**
-   * Broadcast local media state (mute, camera, screen share) to room peers
-   */
-  sendMediaState(mediaState) {
+  sendMediaState({ isMuted }) {
     if (!this.isCallActive) return;
-    this.diagnosticsInfo.lastMediaStateSent = {
-      timestamp: new Date().toISOString(),
-      payload: { ...mediaState }
-    };
-    traceLog(`client sent webrtc:media-state from: ${socket.id}`, mediaState);
-    socket.emit('webrtc:media-state', mediaState);
+    socket.emit('webrtc:media-state', {
+      isMuted: Boolean(isMuted)
+    });
   }
 
-  /**
-   * Bind Socket.IO signaling event listeners
-   */
   bindSocketListeners() {
     this.unbindSocketListeners();
 
-    this.handleExistingPeers = this.handleExistingPeers.bind(this);
-    this.handlePeerJoined = this.handlePeerJoined.bind(this);
-    this.handleSignal = this.handleSignal.bind(this);
-    this.handleMediaStateUpdated = this.handleMediaStateUpdated.bind(this);
-    this.handlePeerLeft = this.handlePeerLeft.bind(this);
-    this.handleSocketReconnect = this.handleSocketReconnect.bind(this);
-
-    socket.on('webrtc:existing-peers', this.handleExistingPeers);
     socket.on('webrtc:peer-joined', this.handlePeerJoined);
     socket.on('webrtc:signal', this.handleSignal);
     socket.on('webrtc:media-state-updated', this.handleMediaStateUpdated);
     socket.on('webrtc:peer-left', this.handlePeerLeft);
-    socket.on('connect', this.handleSocketReconnect);
   }
 
   unbindSocketListeners() {
-    if (this.handleExistingPeers) {
-      socket.off('webrtc:existing-peers', this.handleExistingPeers);
-      socket.off('webrtc:peer-joined', this.handlePeerJoined);
-      socket.off('webrtc:signal', this.handleSignal);
-      socket.off('webrtc:media-state-updated', this.handleMediaStateUpdated);
-      socket.off('webrtc:peer-left', this.handlePeerLeft);
-      socket.off('connect', this.handleSocketReconnect);
-    }
+    socket.off('webrtc:peer-joined', this.handlePeerJoined);
+    socket.off('webrtc:signal', this.handleSignal);
+    socket.off('webrtc:media-state-updated', this.handleMediaStateUpdated);
+    socket.off('webrtc:peer-left', this.handlePeerLeft);
   }
 
-  /**
-   * Handle socket reconnection — re-join call seamlessly
-   */
-  handleSocketReconnect() {
-    if (this.isCallActive) {
-      console.debug('[WebRTC] Socket reconnected, re-announcing join-call');
-      traceLog(`client sent webrtc:join-call on reconnect from: ${socket.id}`);
-      socket.emit('webrtc:join-call', {
-        isMuted: !this.localStream?.getAudioTracks().some(t => t.enabled),
-        isCameraOff: !this.localStream?.getVideoTracks().some(t => t.enabled && t.readyState === 'live')
-      });
-    }
-  }
-
-  handleExistingPeers({ peers }) {
-    if (!Array.isArray(peers)) return;
-    traceLog(`client received webrtc:existing-peers to: ${socket.id}, count: ${peers.length}`, peers);
-
-    peers.forEach(peer => {
-      if (peer.peerId && peer.peerId !== socket.id) {
-        this.getOrCreatePeerConnection(peer.peerId, peer.userName, peer.avatarColor, {
-          isMuted: peer.isMuted,
-          isCameraOff: peer.isCameraOff,
-          isScreenSharing: peer.isScreenSharing
-        });
-        if (this.peerMediaStates.has(peer.peerId)) {
-          const current = this.peerMediaStates.get(peer.peerId);
-          this.peerMediaStates.set(peer.peerId, {
-            ...current,
-            userName: peer.userName || current.userName,
-            avatarColor: peer.avatarColor || current.avatarColor,
-            isMuted: peer.isMuted !== undefined ? Boolean(peer.isMuted) : current.isMuted,
-            isCameraOff: peer.isCameraOff !== undefined ? Boolean(peer.isCameraOff) : current.isCameraOff,
-            isScreenSharing: peer.isScreenSharing !== undefined ? Boolean(peer.isScreenSharing) : current.isScreenSharing
-          });
-        }
-      }
-    });
+  handlePeerJoined = ({ peerId, userName, avatarColor, mediaState }) => {
+    if (!this.isCallActive || peerId === socket.id) return;
+    console.log(`[WebRTC] Peer joined: ${peerId} (${userName})`);
+    this.getOrCreatePeerConnection(peerId, userName, avatarColor, mediaState);
     this.notify('peers-updated', this.getAllPeers());
-  }
+  };
 
-  handlePeerJoined(peer) {
-    if (!peer || !peer.peerId || peer.peerId === socket.id) return;
-    traceLog(`client received webrtc:peer-joined to: ${socket.id}, from: ${peer.peerId}`, peer);
-
-    this.getOrCreatePeerConnection(peer.peerId, peer.userName, peer.avatarColor, {
-      isMuted: peer.isMuted,
-      isCameraOff: peer.isCameraOff,
-      isScreenSharing: peer.isScreenSharing
-    });
-
-    if (this.peerMediaStates.has(peer.peerId)) {
-      const current = this.peerMediaStates.get(peer.peerId);
-      this.peerMediaStates.set(peer.peerId, {
-        ...current,
-        userName: peer.userName || current.userName,
-        avatarColor: peer.avatarColor || current.avatarColor,
-        isMuted: peer.isMuted !== undefined ? Boolean(peer.isMuted) : current.isMuted,
-        isCameraOff: peer.isCameraOff !== undefined ? Boolean(peer.isCameraOff) : current.isCameraOff,
-        isScreenSharing: peer.isScreenSharing !== undefined ? Boolean(peer.isScreenSharing) : current.isScreenSharing
-      });
-    }
-
-    // Send our current local media state to the newly joined peer
-    const audioLive = this.localStream?.getAudioTracks().some(t => t.readyState === 'live' && t.enabled);
-    const videoLive = this.localStream?.getVideoTracks().some(t => t.readyState === 'live' && !t.muted && t.enabled);
-    this.sendMediaState({
-      isMuted: !audioLive,
-      isCameraOff: !videoLive
-    });
-
-    this.notify('peers-updated', this.getAllPeers());
-  }
-
-  /**
-   * Handle incoming WebRTC signaling messages with Perfect Negotiation
-   */
-  async handleSignal({ from, fromName, signal, type }) {
-    if (!from || from === socket.id || !this.isCallActive) return;
-    traceLog(`client received webrtc:signal type: ${type}, from: ${from}, to: ${socket.id}`);
-
-    let record = this.peerConnections.get(from);
-    if (!record) {
-      record = this.getOrCreatePeerConnection(from, fromName, '#5865f2');
-    }
-
+  handleSignal = async ({ from, signal, type }) => {
+    if (!this.isCallActive) return;
+    const record = this.getOrCreatePeerConnection(from);
     const pc = record.pc;
 
     try {
-      if (type === 'offer') {
-        const offerCollision = record.makingOffer || pc.signalingState !== 'stable';
-        record.ignoreOffer = !record.polite && offerCollision;
+      if (type === 'candidate' || (signal && signal.candidate)) {
+        const cand = signal.candidate ? signal : signal;
+        if (!pc.remoteDescription || !pc.remoteDescription.type) {
+          if (!this.iceCandidatesQueue.has(from)) {
+            this.iceCandidatesQueue.set(from, []);
+          }
+          this.iceCandidatesQueue.get(from).push(cand);
+        } else {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+          } catch (e) {
+            console.debug('[WebRTC] Candidate error:', e);
+          }
+        }
+      } else if (type === 'offer' || (signal && signal.type === 'offer')) {
+        const offer = signal.type ? signal : { type: 'offer', sdp: signal.sdp || signal };
+        const readyForOffer = !record.makingOffer && (pc.signalingState === 'stable' || record.isSettingRemoteAnswerPending);
+        const offerCollision = !readyForOffer;
 
+        record.ignoreOffer = !record.polite && offerCollision;
         if (record.ignoreOffer) {
-          traceLog(`Impolite peer ignoring colliding offer from: ${from}, local: ${socket.id}`);
+          console.warn(`[WebRTC] Glare detected with ${from}: Impolite peer ignoring incoming offer.`);
           return;
         }
 
-        if (offerCollision) {
-          traceLog(`Polite peer rolling back local description for: ${from}, local: ${socket.id}`);
-          await pc.setLocalDescription({ type: 'rollback' });
-        }
-
-        await pc.setRemoteDescription(new RTCSessionDescription(signal));
+        record.isSettingRemoteAnswerPending = false;
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
         await this.drainQueuedCandidates(from, pc);
 
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
-        traceLog(`client sent webrtc:signal answer from: ${socket.id} to: ${from}`);
         socket.emit('webrtc:signal', {
           to: from,
           signal: pc.localDescription,
           type: 'answer'
         });
-      } else if (type === 'answer') {
+      } else if (type === 'answer' || (signal && signal.type === 'answer')) {
+        const answer = signal.type ? signal : { type: 'answer', sdp: signal.sdp || signal };
         if (pc.signalingState === 'have-local-offer') {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal));
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
           await this.drainQueuedCandidates(from, pc);
-        } else {
-          traceLog(`Received answer in unexpected state: ${pc.signalingState} from: ${from}`);
-        }
-      } else if (type === 'candidate') {
-        if (signal && signal.candidate) {
-          if (pc.remoteDescription && pc.remoteDescription.type) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(signal));
-            } catch (err) {
-              if (!record.ignoreOffer) {
-                console.warn('[WebRTC] addIceCandidate error:', err);
-              }
-            }
-          } else {
-            // Buffer candidate until remote description is established
-            if (!this.iceCandidatesQueue.has(from)) {
-              this.iceCandidatesQueue.set(from, []);
-            }
-            this.iceCandidatesQueue.get(from).push(signal);
-          }
         }
       }
     } catch (err) {
-      console.error('[WebRTC] Error handling signal:', type, err);
+      console.error(`[WebRTC] Error handling signal from ${from}:`, err);
     }
-  }
+  };
 
-  handleMediaStateUpdated({ peerId, isMuted, isCameraOff, isScreenSharing }) {
-    if (!peerId || peerId === socket.id) return;
-    this.diagnosticsInfo.lastMediaStateReceived = {
-      timestamp: new Date().toISOString(),
-      from: peerId,
-      payload: { isMuted, isCameraOff, isScreenSharing }
-    };
-    traceLog(`client received webrtc:media-state-updated from: ${peerId}, to: ${socket.id}`, { isMuted, isCameraOff, isScreenSharing });
-
+  handleMediaStateUpdated = ({ peerId, isMuted }) => {
+    if (!this.isCallActive) return;
     const current = this.peerMediaStates.get(peerId) || {};
     this.peerMediaStates.set(peerId, {
       ...current,
-      isMuted: isMuted !== undefined ? Boolean(isMuted) : current.isMuted,
-      isCameraOff: isCameraOff !== undefined ? Boolean(isCameraOff) : current.isCameraOff,
-      isScreenSharing: isScreenSharing !== undefined ? Boolean(isScreenSharing) : current.isScreenSharing
+      isMuted: isMuted !== undefined ? Boolean(isMuted) : current.isMuted
     });
-
     this.notify('peers-updated', this.getAllPeers());
-  }
+  };
 
-  handlePeerLeft({ peerId }) {
-    if (!peerId) return;
-    traceLog(`client received webrtc:peer-left from: ${peerId}, to: ${socket.id}`);
-    console.debug('[WebRTC] Peer left call:', peerId);
+  handlePeerLeft = ({ peerId }) => {
+    if (!this.peerConnections.has(peerId)) return;
+    console.log(`[WebRTC] Peer left: ${peerId}`);
 
     const record = this.peerConnections.get(peerId);
     if (record) {
-      this.closePeerConnection(peerId, record);
-      this.peerConnections.delete(peerId);
+      if (record.statsInterval) clearInterval(record.statsInterval);
+      if (record.disconnectedTimeout) clearTimeout(record.disconnectedTimeout);
+      if (record.iceCheckingTimer) clearTimeout(record.iceCheckingTimer);
+      try { record.pc.close(); } catch {}
     }
 
+    this.peerConnections.delete(peerId);
     this.iceCandidatesQueue.delete(peerId);
     this.remoteStreams.delete(peerId);
     this.peerMediaStates.delete(peerId);
@@ -635,11 +314,8 @@ class PeerConnectionService {
     }
 
     this.notify('peers-updated', this.getAllPeers());
-  }
+  };
 
-  /**
-   * Drain queued ICE candidates once remote description is set
-   */
   async drainQueuedCandidates(peerId, pc) {
     const queue = this.iceCandidatesQueue.get(peerId);
     if (queue && queue.length > 0) {
@@ -654,20 +330,15 @@ class PeerConnectionService {
     }
   }
 
-  /**
-   * Get existing RTCPeerConnection or create a new one using Perfect Negotiation
-   */
   getOrCreatePeerConnection(peerId, peerName = 'Member', peerColor = '#5865f2', initialMediaState = {}) {
     if (this.peerConnections.has(peerId)) {
-      if (initialMediaState.isMuted !== undefined || initialMediaState.isCameraOff !== undefined) {
+      if (initialMediaState.isMuted !== undefined) {
         const current = this.peerMediaStates.get(peerId) || {};
         this.peerMediaStates.set(peerId, {
           ...current,
           userName: peerName || current.userName,
           avatarColor: peerColor || current.avatarColor,
-          isMuted: initialMediaState.isMuted !== undefined ? Boolean(initialMediaState.isMuted) : current.isMuted,
-          isCameraOff: initialMediaState.isCameraOff !== undefined ? Boolean(initialMediaState.isCameraOff) : current.isCameraOff,
-          isScreenSharing: initialMediaState.isScreenSharing !== undefined ? Boolean(initialMediaState.isScreenSharing) : current.isScreenSharing
+          isMuted: Boolean(initialMediaState.isMuted)
         });
       }
       return this.peerConnections.get(peerId);
@@ -676,10 +347,8 @@ class PeerConnectionService {
     const config = this.iceConfig || DEFAULT_ICE_CONFIG;
     const pc = new RTCPeerConnection(config);
 
-    // Polite role assignment: lexicographical comparison ensures one polite, one impolite
-    const localId = socket.id || this.localSocketId || '';
+    const localId = socket.id || '';
     const polite = localId < peerId;
-    traceLog(`peer polite decision for peerId: ${peerId}, local socket.id: ${localId}, comparison: "${localId}" < "${peerId}", isPolite: ${polite}`);
 
     const record = {
       peerId,
@@ -709,16 +378,12 @@ class PeerConnectionService {
         userName: peerName,
         avatarColor: peerColor,
         isMuted: initialMediaState.isMuted ?? false,
-        isCameraOff: initialMediaState.isCameraOff ?? true,
         isSpeaking: false,
         connectionQuality: 'good'
       });
     }
 
-    // Attach local tracks or pre-allocate transceivers (at most 4 video peers in mesh)
-    const peerOrder = Array.from(this.peerConnections.keys()).indexOf(peerId);
-    const allowVideo = peerOrder === -1 ? this.peerConnections.size <= 4 : peerOrder < 4;
-
+    // Attach local audio track or pre-allocate sendrecv audio transceiver
     const audioTrack = this.localStream?.getAudioTracks().find(t => t.readyState === 'live') || null;
     let audioTransceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
       (t.sender?.track?.kind === 'audio') || (t.receiver?.track?.kind === 'audio')
@@ -738,70 +403,25 @@ class PeerConnectionService {
       audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
     }
 
-    const videoTrack = allowVideo ? (this.localStream?.getVideoTracks().find(t => t.readyState === 'live') || null) : null;
-    let videoTransceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
-      (t.sender?.track?.kind === 'video') || (t.receiver?.track?.kind === 'video')
-    ) : null;
-
-    if (!videoTransceiver) {
-      try {
-        if (videoTrack) {
-          videoTransceiver = pc.addTransceiver(videoTrack, { direction: allowVideo ? 'sendrecv' : 'inactive', streams: this.localStream ? [this.localStream] : [] });
-          applyVideoBitrateCap(videoTransceiver.sender, 400000);
-        } else {
-          videoTransceiver = pc.addTransceiver('video', { direction: allowVideo ? 'sendrecv' : 'inactive' });
-        }
-      } catch (e) {
-        console.debug('[WebRTC] addTransceiver video fallback:', e);
-      }
-    } else if (videoTrack && videoTransceiver.sender.track !== videoTrack) {
-      videoTransceiver.sender.replaceTrack(videoTrack).then(() => {
-        applyVideoBitrateCap(videoTransceiver.sender, 400000);
-      }).catch(() => {});
-    }
-
-    this.logTransceivers(peerId, pc, 'after-initial-setup');
-    traceLog(`initial peer states for peerId: ${peerId}`, {
-      signalingState: pc.signalingState,
-      connectionState: pc.connectionState,
-      iceConnectionState: pc.iceConnectionState
-    });
-
     // Perfect Negotiation: negotiationneeded handler
     pc.onnegotiationneeded = async () => {
-      this.diagnosticsInfo.negotiationNeededCount++;
-      traceLog(`pc.onnegotiationneeded fired for peerId: ${peerId}, signalingState: ${pc.signalingState}, makingOffer: ${record.makingOffer}`);
       try {
         record.makingOffer = true;
         await pc.setLocalDescription();
-        traceLog(`client sent webrtc:signal offer (onnegotiationneeded) from: ${socket.id} to: ${peerId}`);
         socket.emit('webrtc:signal', {
           to: peerId,
           signal: pc.localDescription,
           type: 'offer'
         });
       } catch (err) {
-        console.error('[WebRTC] onnegotiationneeded error:', err);
+        console.warn(`[WebRTC] Error during negotiation offer for ${peerId}:`, err);
       } finally {
         record.makingOffer = false;
       }
     };
 
-    // ICE candidate generation & candidate type logging
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        let cType = event.candidate.type;
-        if (!cType && event.candidate.candidate) {
-          const match = event.candidate.candidate.match(/typ\s+([a-zA-Z0-9]+)/);
-          if (match) cType = match[1];
-        }
-        if (cType) {
-          record.localCandidateTypes.add(cType);
-        }
-        if (isDebug()) {
-          traceLog(`local ICE candidate for peer ${peerId}: type=${cType || 'unknown'}, protocol=${event.candidate.protocol || 'unknown'}, address=${event.candidate.address || 'unknown'}, port=${event.candidate.port || 'unknown'}`);
-        }
-        traceLog(`client sent webrtc:signal candidate from: ${socket.id} to: ${peerId}`);
         socket.emit('webrtc:signal', {
           to: peerId,
           signal: event.candidate,
@@ -810,129 +430,31 @@ class PeerConnectionService {
       }
     };
 
-    // ICE gathering state monitoring
-    pc.onicegatheringstatechange = () => {
-      record.iceGatheringState = pc.iceGatheringState;
-      if (isDebug()) {
-        traceLog(`peer ${peerId} iceGatheringState: ${pc.iceGatheringState}, candidate types: [${Array.from(record.localCandidateTypes).join(', ')}]`);
-      }
-      if (pc.iceGatheringState === 'complete') {
-        if (!record.localCandidateTypes.has('relay')) {
-          console.warn('[webrtc] no relay candidates: TURN is missing or unreachable');
-        }
-      }
-      this.updateStats(peerId);
-      this.notify('peers-updated', this.getAllPeers());
-    };
-
-    // ICE Connection state monitoring
     pc.oniceconnectionstatechange = () => {
       record.iceState = pc.iceConnectionState;
-      if (isDebug()) {
-        traceLog(`peer state change for peerId ${peerId}: iceConnectionState=${pc.iceConnectionState}, iceGatheringState=${pc.iceGatheringState}, connectionState=${pc.connectionState}, candidateTypes=[${Array.from(record.localCandidateTypes).join(', ')}]`);
-      }
-
-      // Check if connection is in 'checking' or 'failed' for more than 10 seconds
-      if (pc.iceConnectionState === 'checking' || pc.iceConnectionState === 'failed') {
-        if (!record.iceCheckingTimer) {
-          record.iceCheckingTimer = setTimeout(() => {
-            if (record.pc && (record.pc.iceConnectionState === 'checking' || record.pc.iceConnectionState === 'failed')) {
-              record.troubleConnecting = true;
-              this.notify('peers-updated', this.getAllPeers());
-            }
-          }, 10000);
-        }
-      } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-        if (record.iceCheckingTimer) {
-          clearTimeout(record.iceCheckingTimer);
-          record.iceCheckingTimer = null;
-        }
-        if (record.troubleConnecting) {
-          record.troubleConnecting = false;
-        }
-      }
-
-      // Handle iceConnectionState 'failed' by calling pc.restartIce() once per peer
       if (pc.iceConnectionState === 'failed') {
         if (!record.hasRestartedIce) {
           record.hasRestartedIce = true;
-          console.warn(`[WebRTC] ICE failed with ${peerId}, calling pc.restartIce() once...`);
           try {
-            pc.restartIce();
-          } catch (e) {
-            console.warn('[WebRTC] restartIce error:', e);
-          }
-        }
-      } else if (pc.iceConnectionState === 'disconnected') {
-        // Handle 'disconnected' by waiting 5 seconds before restarting
-        if (!record.disconnectedTimeout && !record.hasRestartedIce) {
-          record.disconnectedTimeout = setTimeout(() => {
-            record.disconnectedTimeout = null;
-            if (record.pc && record.pc.iceConnectionState === 'disconnected' && !record.hasRestartedIce) {
-              record.hasRestartedIce = true;
-              console.warn(`[WebRTC] Peer ${peerId} disconnected for 5s, restarting ICE...`);
-              try {
-                record.pc.restartIce();
-              } catch (e) {
-                console.warn('[WebRTC] restartIce error:', e);
-              }
+            if (typeof pc.restartIce === 'function') {
+              pc.restartIce();
             }
-          }, 5000);
-        }
-      } else {
-        if (record.disconnectedTimeout) {
-          clearTimeout(record.disconnectedTimeout);
-          record.disconnectedTimeout = null;
+          } catch {}
         }
       }
-
-      this.updateStats(peerId);
       this.notify('peers-updated', this.getAllPeers());
-    };
-
-    pc.onsignalingstatechange = () => {
-      traceLog(`peer state change (signalingState) for peerId: ${peerId}: ${pc.signalingState}`);
     };
 
     pc.onconnectionstatechange = () => {
       record.connectionState = pc.connectionState;
-      if (isDebug()) {
-        traceLog(`peer state change (connectionState) for peerId: ${peerId}: ${pc.connectionState}`);
-      }
-      if (pc.connectionState === 'failed') {
-        console.warn(`[WebRTC] Peer connection failed with ${peerId}`);
-        if (!record.hasRestartedIce) {
-          record.hasRestartedIce = true;
-          try {
-            pc.restartIce();
-          } catch (e) {
-            console.warn('[WebRTC] restartIce error:', e);
-          }
-        }
-      }
-      this.updateStats(peerId);
       this.notify('peers-updated', this.getAllPeers());
     };
 
-    // Incoming remote media track handler (max 4 video peers in mesh)
+    // Incoming remote media track handler (audio-only)
     pc.ontrack = (event) => {
-      traceLog(`ontrack event for peerId: ${peerId}`, {
-        kind: event.track.kind,
-        id: event.track.id,
-        muted: event.track.muted,
-        enabled: event.track.enabled,
-        readyState: event.track.readyState,
-        streamId: event.streams?.[0]?.id
-      });
-      this.logTransceivers(peerId, pc, 'ontrack');
-      console.debug(`[WebRTC] Received remote track (${event.track.kind}) from ${peerId}`);
+      if (event.track.kind !== 'audio') return;
 
-      const peerIndex = Array.from(this.peerConnections.keys()).indexOf(peerId);
-      if (event.track.kind === 'video' && peerIndex >= 4) {
-        console.debug(`[WebRTC] Mesh peer video limit exceeded, dropping remote video from ${peerId} (forced audio-only)`);
-        return;
-      }
-
+      console.debug(`[WebRTC] Received remote audio track from ${peerId}`);
       let stream = this.remoteStreams.get(peerId);
       if (!stream) {
         stream = event.streams[0] || new MediaStream();
@@ -943,20 +465,14 @@ class PeerConnectionService {
         stream.addTrack(event.track);
       }
 
-      // If audio track, attach remote speaking detector
-      if (event.track.kind === 'audio') {
-        this.initRemoteSpeakingDetector(peerId, event.track);
-      }
+      this.initRemoteSpeakingDetector(peerId, event.track);
 
       event.track.onended = () => {
-        console.debug(`[WebRTC] Remote track ${event.track.kind} ended for ${peerId}`);
         this.notify('peers-updated', this.getAllPeers());
       };
-
       event.track.onmute = () => {
         this.notify('peers-updated', this.getAllPeers());
       };
-
       event.track.onunmute = () => {
         this.notify('peers-updated', this.getAllPeers());
       };
@@ -964,47 +480,12 @@ class PeerConnectionService {
       this.notify('peers-updated', this.getAllPeers());
     };
 
-    // WebRTC connection quality monitor using getStats()
-    record.statsInterval = setInterval(async () => {
-      if (pc.connectionState !== 'connected') return;
-      try {
-        const stats = await pc.getStats();
-        let rtt = null;
-        let packetsLost = 0;
-
-        stats.forEach(report => {
-          if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-            rtt = report.currentRoundTripTime ? report.currentRoundTripTime * 1000 : null;
-          }
-          if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-            packetsLost = report.packetsLost || 0;
-          }
-        });
-
-        let quality = 'good';
-        if (rtt && (rtt > 300 || packetsLost > 20)) {
-          quality = 'poor';
-        } else if (rtt && (rtt > 150 || packetsLost > 5)) {
-          quality = 'fair';
-        }
-
-        const media = this.peerMediaStates.get(peerId);
-        if (media && media.connectionQuality !== quality) {
-          media.connectionQuality = quality;
-          this.notify('peers-updated', this.getAllPeers());
-        }
-      } catch (e) {}
-    }, 5000);
-
-    this.notify('peers-updated', this.getAllPeers());
     return record;
   }
 
-  /**
-   * Voice Activity Detection for incoming remote peer audio
-   */
   initRemoteSpeakingDetector(peerId, audioTrack) {
-    if (typeof window === 'undefined' || !audioTrack) return;
+    if (typeof window === 'undefined') return;
+
     try {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) return;
@@ -1013,20 +494,30 @@ class PeerConnectionService {
         this.audioContext = new AudioContextClass();
       }
 
-      const mediaStream = new MediaStream([audioTrack]);
-      const source = this.audioContext.createMediaStreamSource(mediaStream);
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {});
+      }
+
+      const stream = new MediaStream([audioTrack]);
+      const source = this.audioContext.createMediaStreamSource(stream);
       const analyser = this.audioContext.createAnalyser();
       analyser.fftSize = 512;
       analyser.smoothingTimeConstant = 0.4;
       source.connect(analyser);
 
+      if (this.remoteAnalysers.has(peerId)) {
+        clearInterval(this.remoteAnalysers.get(peerId).interval);
+      }
+
       const buffer = new Uint8Array(analyser.frequencyBinCount);
       let speakingFrames = 0;
 
       const interval = setInterval(() => {
-        if (!audioTrack.enabled || audioTrack.readyState !== 'live') {
-          const media = this.peerMediaStates.get(peerId);
-          if (media && media.isSpeaking) {
+        const media = this.peerMediaStates.get(peerId);
+        if (!media) return;
+
+        if (media.isMuted || !audioTrack.enabled || audioTrack.readyState !== 'live') {
+          if (media.isSpeaking) {
             media.isSpeaking = false;
             this.notify('peers-updated', this.getAllPeers());
           }
@@ -1035,15 +526,10 @@ class PeerConnectionService {
 
         analyser.getByteFrequencyData(buffer);
         let sum = 0;
-        for (let i = 0; i < buffer.length; i++) {
-          sum += buffer[i];
-        }
-        const avg = sum / buffer.length / 255;
+        for (let i = 0; i < buffer.length; i++) sum += buffer[i];
+        const average = sum / buffer.length / 255;
 
-        const media = this.peerMediaStates.get(peerId);
-        if (!media) return;
-
-        if (avg > 0.035) {
+        if (average > 0.035) {
           speakingFrames++;
           if (speakingFrames >= 2 && !media.isSpeaking) {
             media.isSpeaking = true;
@@ -1056,7 +542,7 @@ class PeerConnectionService {
             this.notify('peers-updated', this.getAllPeers());
           }
         }
-      }, 150);
+      }, 120);
 
       this.remoteAnalysers.set(peerId, { analyser, interval });
     } catch (e) {
@@ -1064,35 +550,14 @@ class PeerConnectionService {
     }
   }
 
-  closePeerConnection(peerId, record) {
-    if (record.statsInterval) {
-      clearInterval(record.statsInterval);
+  unlockAudio() {
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
     }
-    if (record.iceCheckingTimer) {
-      clearTimeout(record.iceCheckingTimer);
-      record.iceCheckingTimer = null;
-    }
-    if (record.disconnectedTimeout) {
-      clearTimeout(record.disconnectedTimeout);
-      record.disconnectedTimeout = null;
-    }
-    if (record.pc) {
-      record.pc.onicecandidate = null;
-      record.pc.onicegatheringstatechange = null;
-      record.pc.ontrack = null;
-      record.pc.onnegotiationneeded = null;
-      record.pc.oniceconnectionstatechange = null;
-      record.pc.onconnectionstatechange = null;
-      record.pc.onsignalingstatechange = null;
-      try {
-        record.pc.close();
-      } catch (e) {}
-    }
+    this.autoplayBlocked = false;
+    this.notify('autoplay-unblocked');
   }
 
-  /**
-   * Return formatted dictionary of all remote peers
-   */
   getAllPeers() {
     const peers = {};
     for (const [peerId, record] of this.peerConnections.entries()) {
@@ -1100,20 +565,10 @@ class PeerConnectionService {
       const stream = this.remoteStreams.get(peerId) || null;
 
       const audioTracks = stream ? stream.getAudioTracks() : [];
-      const videoTracks = stream ? stream.getVideoTracks() : [];
-
-      // Microphone is on if there is a live audio track with enabled=true; fall back to media-state only when no track exists yet
       let isMuted = Boolean(media.isMuted);
       if (audioTracks.length > 0) {
         const hasLiveAudio = audioTracks.some(t => t.readyState === 'live' && t.enabled);
         isMuted = !hasLiveAudio;
-      }
-
-      // Camera is on if the remote stream has a live video track that is not muted and has enabled=true; fall back to media-state only when no track exists yet
-      let isCameraOff = Boolean(media.isCameraOff);
-      if (videoTracks.length > 0) {
-        const hasLiveVideo = videoTracks.some(t => t.readyState === 'live' && !t.muted && t.enabled);
-        isCameraOff = !hasLiveVideo;
       }
 
       peers[peerId] = {
@@ -1121,7 +576,6 @@ class PeerConnectionService {
         userName: record.peerName || media.userName || 'Member',
         avatarColor: record.peerColor || media.avatarColor || '#5865f2',
         isMuted,
-        isCameraOff,
         isSpeaking: Boolean(media.isSpeaking),
         connectionQuality: media.connectionQuality || 'good',
         iceState: record.iceState,
@@ -1130,107 +584,6 @@ class PeerConnectionService {
       };
     }
     return peers;
-  }
-
-  /**
-   * Extract active candidate pair from pc.getStats()
-   */
-  async updateStats(peerId) {
-    const record = this.peerConnections.get(peerId);
-    if (!record || !record.pc || typeof record.pc.getStats !== 'function') return;
-    try {
-      const stats = await record.pc.getStats();
-      let activePair = null;
-      stats.forEach(report => {
-        if (report.type === 'transport' && report.selectedCandidatePairId) {
-          activePair = stats.get(report.selectedCandidatePairId);
-        }
-        if (!activePair && report.type === 'candidate-pair' && (report.selected || report.nominated)) {
-          if (report.state === 'succeeded' || !activePair) {
-            activePair = report;
-          }
-        }
-      });
-      if (activePair) {
-        const localCand = stats.get(activePair.localCandidateId);
-        const remoteCand = stats.get(activePair.remoteCandidateId);
-        const localType = localCand?.candidateType || 'unknown';
-        const remoteType = remoteCand?.candidateType || 'unknown';
-        let pairType = 'host';
-        if (localType === 'relay' || remoteType === 'relay') {
-          pairType = 'relay';
-        } else if (localType === 'srflx' || remoteType === 'srflx') {
-          pairType = 'srflx';
-        } else if (localType === 'prflx' || remoteType === 'prflx') {
-          pairType = 'prflx';
-        }
-        record.selectedCandidatePairType = pairType;
-        record.selectedPairDetails = `${localType}->${remoteType}`;
-      }
-    } catch {}
-  }
-
-  /**
-   * Autoplay unlocker: Resumes Web Audio Context & triggers playback on all audio elements
-   */
-  async unlockAudio() {
-    if (this.audioContext && this.audioContext.state === 'suspended') {
-      try {
-        await this.audioContext.resume();
-      } catch (e) {}
-    }
-
-    document.querySelectorAll('audio').forEach(audio => {
-      if (audio.paused && audio.srcObject) {
-        audio.play().catch(e => console.debug('[WebRTC] Unlock audio catch:', e));
-      }
-    });
-
-    this.autoplayBlocked = false;
-    this.notify('autoplay-changed', false);
-  }
-
-  getDiagnostics() {
-    const connections = [];
-    for (const [peerId, record] of this.peerConnections.entries()) {
-      const pc = record.pc;
-      if (!pc) continue;
-      this.updateStats(peerId);
-      const senders = (typeof pc.getSenders === 'function' ? pc.getSenders() : []).map(s => ({
-        kind: s.track ? s.track.kind : (s.kind || 'unknown'),
-        trackId: s.track?.id || null,
-        readyState: s.track?.readyState || 'none',
-        enabled: s.track?.enabled ?? false
-      }));
-      const transceivers = (typeof pc.getTransceivers === 'function' ? pc.getTransceivers() : []).map(t => ({
-        mid: t.mid,
-        direction: t.direction,
-        currentDirection: t.currentDirection,
-        senderTrackKind: t.sender?.track?.kind || null,
-        senderTrackReadyState: t.sender?.track?.readyState || null,
-        senderTrackEnabled: t.sender?.track?.enabled ?? null
-      }));
-      connections.push({
-        peerId,
-        connectionState: pc.connectionState,
-        iceConnectionState: pc.iceConnectionState,
-        iceGatheringState: pc.iceGatheringState || record.iceGatheringState || 'unknown',
-        candidateTypes: Array.from(record.localCandidateTypes || []),
-        selectedCandidatePairType: record.selectedCandidatePairType || 'none',
-        selectedPairDetails: record.selectedPairDetails || '',
-        troubleConnecting: Boolean(record.troubleConnecting),
-        signalingState: pc.signalingState,
-        polite: record.polite,
-        senders,
-        transceivers
-      });
-    }
-    return {
-      engine: 'mesh',
-      connections,
-      iceFetchError: this.iceFetchError ? this.iceFetchError.message : null,
-      diagnostics: this.diagnosticsInfo
-    };
   }
 }
 

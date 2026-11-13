@@ -4,9 +4,9 @@ import livekitService from '../services/livekitService';
 import mediaService from '../services/mediaService';
 
 /**
- * Universal Unified Real-Time Communication Hook
+ * Universal Unified Audio Real-Time Communication Hook
  * Automatically uses LiveKit SFU if server credentials are set in .env;
- * gracefully and reliably falls back to native W3C Perfect Negotiation WebRTC mesh.
+ * gracefully falls back to native W3C Perfect Negotiation WebRTC audio mesh.
  */
 export function useWebRTC({
   roomId,
@@ -53,19 +53,20 @@ export function useWebRTC({
     if (!isCallActive) return;
 
     let mounted = true;
+    let cleanupCurrent = null;
 
     // 1. Try LiveKit SFU first
     livekitService.connectRoom({
       roomId,
       userName,
       sessionId,
-      localStream,
-      initialMediaState
+      localStream: streamRef.current,
+      initialMediaState: initialMediaStateRef.current
     }).then(result => {
       if (!mounted) return;
 
       if (result && result.connected) {
-        console.info('[MediaCoordinator] Using LiveKit SFU');
+        console.info('[VoiceEngine] Using LiveKit SFU audio engine (credentials detected)');
         setActiveEngine('livekit');
         setConnectionNotice(null);
         const unsub = livekitService.subscribe((event, payload) => {
@@ -73,19 +74,18 @@ export function useWebRTC({
             setPeers({ ...payload });
           }
         });
-        return () => {
+        cleanupCurrent = () => {
           unsub();
           livekitService.disconnect();
         };
       } else {
         // 2. Seamless fallback to Native WebRTC Mesh
         const reason = result?.reason || 'missing credentials';
-        console.warn(`[MediaCoordinator] Using Native WebRTC mesh: reason: ${reason}`);
+        console.info(`[VoiceEngine] Using Native WebRTC audio mesh: ${reason}`);
         setActiveEngine('webrtc');
 
         if (reason === 'token request failed' || reason === 'connect failed') {
-          console.error(`[MediaCoordinator] LiveKit error: ${result?.error || reason}. Showing fallback notice.`);
-          setConnectionNotice('LiveKit SFU connection failed. Switched to peer-to-peer mesh.');
+          setConnectionNotice('Switched to peer-to-peer audio mesh.');
         } else {
           setConnectionNotice(null);
         }
@@ -93,18 +93,16 @@ export function useWebRTC({
         const unsub = peerConnectionService.subscribe((event, payload) => {
           if (event === 'peers-updated') {
             setPeers({ ...payload });
-          } else if (event === 'autoplay-changed') {
-            setAutoplayBlocked(Boolean(payload));
-          } else if (event === 'ice-fetch-failed') {
-            setConnectionNotice('Could not reach relay server. Connections may be limited.');
+          } else if (event === 'autoplay-unblocked') {
+            setAutoplayBlocked(false);
           }
         });
 
-        peerConnectionService.joinCall(localStream, initialMediaState).catch(err => {
-          console.error('[WebRTC] joinCall error:', err);
+        peerConnectionService.initiateCall({ localStream: streamRef.current, sessionId, initialMediaState: initialMediaStateRef.current }).catch(err => {
+          console.error('[WebRTC] initiateCall error:', err);
         });
 
-        return () => {
+        cleanupCurrent = () => {
           unsub();
           peerConnectionService.leaveCall();
         };
@@ -113,8 +111,10 @@ export function useWebRTC({
 
     return () => {
       mounted = false;
-      livekitService.disconnect();
-      if (activeEngine !== 'livekit') {
+      if (cleanupCurrent) {
+        cleanupCurrent();
+      } else {
+        livekitService.disconnect();
         peerConnectionService.leaveCall();
       }
     };
@@ -123,13 +123,7 @@ export function useWebRTC({
   const sendMediaState = useCallback((state) => {
     if (activeEngine === 'livekit') {
       if (state.isMuted !== undefined) {
-        livekitService.setMicrophoneMuted(state.isMuted);
-      }
-      if (state.isCameraOff !== undefined) {
-        livekitService.setCameraEnabled(!state.isCameraOff);
-      }
-      if (state.isScreenSharing !== undefined) {
-        livekitService.setScreenShareEnabled(state.isScreenSharing);
+        livekitService.setMicrophoneEnabled(!state.isMuted);
       }
     }
     peerConnectionService.sendMediaState(state);
@@ -137,6 +131,7 @@ export function useWebRTC({
 
   const unlockAudio = useCallback(async () => {
     await peerConnectionService.unlockAudio();
+    await livekitService.startAudio();
     setAutoplayBlocked(false);
   }, []);
 

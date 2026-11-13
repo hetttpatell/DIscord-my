@@ -84,9 +84,7 @@ class RoomStore {
       hostSessionId: room.hostSessionId || null,
       passwordHash: room.passwordHash || null,
       resumeTokens: room.resumeTokens || {},
-      requireApproval: Boolean(room.requireApproval),
-      createdAt: room.createdAt || Date.now(),
-      settings: room.settings || { djMode: false }
+      createdAt: room.createdAt || Date.now()
     };
   }
 
@@ -96,7 +94,6 @@ class RoomStore {
       name: data.name || 'afterspot Lounge',
       passwordHash: data.passwordHash || null,
       resumeTokens: data.resumeTokens || {},
-      requireApproval: Boolean(data.requireApproval),
       hostId: data.hostId || null,
       hostSocketId: null,
       hostSessionId: data.hostSessionId || null,
@@ -106,12 +103,8 @@ class RoomStore {
       playbackPosition: typeof data.pausedOffsetSec === 'number' ? data.pausedOffsetSec : (data.playbackPosition || 0),
       lastStateChangeTime: data.startedAtServerMs || data.lastStateChangeTime || Date.now(),
       queue: Array.isArray(data.queue) ? data.queue : [],
-      history: [],
       members: [],
-      waitingList: [],
-      chatMessages: [],
-      callParticipants: new Map(),
-      settings: data.settings || { djMode: false }
+      callParticipants: new Map()
     };
   }
 

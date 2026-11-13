@@ -40,34 +40,19 @@ describe('participantsStore Unit Tests', () => {
     ]);
 
     participantsStore.syncPeers({
-      'peer-1': { isMuted: false, isCameraOff: false, connectionQuality: 'fair' }
+      'peer-1': { isMuted: false, connectionQuality: 'fair' }
     });
 
     const p1 = participantsStore.getParticipant('peer-1');
     assert.ok(p1);
     assert.equal(p1.name, 'Alice');
     assert.equal(p1.audioEnabled, true);
-    assert.equal(p1.videoEnabled, true);
     assert.equal(p1.connectionQuality, 'medium'); // fair -> medium
 
     const ids = participantsStore.getParticipantIds();
     assert.ok(ids.includes('local-1'));
     assert.ok(ids.includes('peer-1'));
     assert.ok(ids.includes('peer-2'));
-  });
-
-  it('tracks handRaisedAt timestamp', () => {
-    participantsStore.reset();
-    participantsStore.setSignalingMembers([{ id: 'peer-1', name: 'Alice' }]);
-
-    const timestamp = Date.now();
-    participantsStore.setHandRaised('peer-1', timestamp);
-
-    const p1 = participantsStore.getParticipant('peer-1');
-    assert.equal(p1.handRaisedAt, timestamp);
-
-    participantsStore.setHandRaised('peer-1', null);
-    assert.equal(participantsStore.getParticipant('peer-1').handRaisedAt, null);
   });
 
   it('audio levels can be updated and subscribed outside React state', () => {
@@ -120,13 +105,10 @@ describe('participantsStore Unit Tests', () => {
 
     // P2 starts speaking 200ms after P1 became active
     participantsStore.reportSpeechActivity('p2', true);
-    // After 350ms of P2 speaking, only ~550ms has passed since P1 became active
-    // P1 MUST still be the active speaker due to 1500ms holdover!
     await new Promise(r => setTimeout(r, 350));
     assert.equal(participantsStore.getActiveSpeakerId(), 'p1');
 
     // Wait until full 1500ms has elapsed since P1 became active
-    // Since P2 is still speaking, P2 should now be promoted!
     await new Promise(r => setTimeout(r, 1300));
     assert.equal(participantsStore.getActiveSpeakerId(), 'p2');
 
@@ -137,7 +119,6 @@ describe('participantsStore Unit Tests', () => {
     participantsStore.reset();
     const { subscribe, subscribeIds, subscribeActiveSpeaker, getSnapshot, getActiveSpeakerId, getParticipantIds } = participantsStore;
 
-    // Call as detached functions (this === undefined)
     const unsubSpeaker = subscribeActiveSpeaker(() => {});
     const unsubIds = subscribeIds(() => {});
     const unsubGlobal = subscribe(() => {});

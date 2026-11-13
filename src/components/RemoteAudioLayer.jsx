@@ -4,8 +4,15 @@ import livekitService from '../services/livekitService';
 import mediaService from '../services/mediaService';
 import AudioUnlockBanner from './AudioUnlockBanner';
 
-function RemoteAudioItem({ peer, onAutoplayBlocked }) {
+function RemoteAudioItem({ peer, onAutoplayBlocked, voicesVolume = 100 }) {
   const audioRef = useRef(null);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (el) {
+      el.volume = Math.max(0, Math.min(1, voicesVolume / 100));
+    }
+  }, [voicesVolume]);
 
   useEffect(() => {
     const el = audioRef.current;
@@ -25,7 +32,6 @@ function RemoteAudioItem({ peer, onAutoplayBlocked }) {
       }
     });
 
-    // Microphone is on if there is a live audio track with enabled=true; fall back to media-state only when no track exists yet
     const audioTracks = peer.stream.getAudioTracks();
     if (audioTracks.length > 0) {
       const hasLiveAudio = audioTracks.some(t => t.readyState === 'live' && t.enabled);
@@ -74,7 +80,7 @@ function RemoteAudioItem({ peer, onAutoplayBlocked }) {
   );
 }
 
-export default function RemoteAudioLayer() {
+export default function RemoteAudioLayer({ voicesVolume = 100 }) {
   const [peers, setPeers] = useState({});
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const webrtcPeersRef = useRef({});
@@ -113,7 +119,6 @@ export default function RemoteAudioLayer() {
   const handleUnlockAudio = useCallback(async () => {
     await peerConnectionService.unlockAudio();
     await livekitService.startAudio();
-    // Try re-playing all audio elements in document
     document.querySelectorAll('audio').forEach(a => {
       if (a.paused && a.srcObject) {
         a.play().catch(() => {});
@@ -152,10 +157,10 @@ export default function RemoteAudioLayer() {
             key={peer.peerId}
             peer={peer}
             onAutoplayBlocked={handleAutoplayBlocked}
+            voicesVolume={voicesVolume}
           />
         ))}
       </div>
     </>
   );
 }
-

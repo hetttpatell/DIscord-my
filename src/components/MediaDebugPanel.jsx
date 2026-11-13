@@ -5,9 +5,12 @@ import peerConnectionService from '../services/peerConnectionService';
 import livekitService from '../services/livekitService';
 
 export default function MediaDebugPanel() {
-  const [isVisible, setIsVisible] = useState(false);
+  const [isVisible] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('debug') === '1';
+  });
   const [debugState, setDebugState] = useState({
-    cameraPermission: 'checking...',
     micPermission: 'checking...',
     isSecureContext: typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false,
     protocol: typeof window !== 'undefined' ? window.location.protocol : '',
@@ -19,28 +22,14 @@ export default function MediaDebugPanel() {
   });
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    setIsVisible(params.get('debug') === '1');
-  }, []);
-
-  useEffect(() => {
     if (!isVisible) return;
 
     let mounted = true;
 
     const poll = async () => {
-      let cameraPerm = 'unsupported';
       let micPerm = 'unsupported';
 
       if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
-        try {
-          const res = await navigator.permissions.query({ name: 'camera' });
-          cameraPerm = res.state;
-        } catch (e) {
-          cameraPerm = `n/a (${e.name || 'unsupported'})`;
-        }
-
         try {
           const res = await navigator.permissions.query({ name: 'microphone' });
           micPerm = res.state;
@@ -60,10 +49,8 @@ export default function MediaDebugPanel() {
           readyState: t.readyState,
           enabled: t.enabled,
           muted: t.muted,
-          width: settings.width,
-          height: settings.height,
-          frameRate: settings.frameRate,
-          facingMode: settings.facingMode
+          deviceId: settings.deviceId,
+          echoCancellation: settings.echoCancellation
         };
       });
 
@@ -76,7 +63,6 @@ export default function MediaDebugPanel() {
 
       if (mounted) {
         setDebugState({
-          cameraPermission: cameraPerm,
           micPermission: micPerm,
           isSecureContext: typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false,
           protocol: typeof window !== 'undefined' ? window.location.protocol : '',
@@ -109,7 +95,7 @@ export default function MediaDebugPanel() {
   return (
     <div className="fixed top-2 left-2 z-[9999] max-w-sm max-h-[85vh] overflow-y-auto bg-black/90 text-green-400 p-3 rounded-xl border border-green-500/40 font-mono text-[11px] shadow-2xl backdrop-blur-md select-text pointer-events-auto leading-relaxed">
       <div className="flex items-center justify-between border-b border-green-500/30 pb-1 mb-2">
-        <span className="font-bold text-white text-xs">🐞 Media Diagnostics (?debug=1)</span>
+        <span className="font-bold text-white text-xs">🐞 Audio Diagnostics (?debug=1)</span>
         <span className="text-[10px] bg-green-500/20 px-1.5 py-0.5 rounded text-green-300">LIVE</span>
       </div>
 
@@ -124,17 +110,14 @@ export default function MediaDebugPanel() {
 
         {/* MediaController Explicit States */}
         <div>
-          <div className="text-gray-400 uppercase text-[9px] font-bold">MediaController State</div>
+          <div className="text-gray-400 uppercase text-[9px] font-bold">Mic Controller State</div>
           <div>micState: <span className="text-yellow-300 font-bold">{debugState.controllerState?.micState}</span></div>
-          <div>cameraState: <span className="text-yellow-300 font-bold">{debugState.controllerState?.cameraState}</span></div>
-          <div>facingMode: <span className="text-white">{debugState.controllerState?.facingMode}</span></div>
           <div>isSpeaking: <span className={debugState.controllerState?.isSpeaking ? 'text-green-300 font-bold' : 'text-gray-400'}>{String(debugState.controllerState?.isSpeaking)}</span></div>
         </div>
 
         {/* Permissions */}
         <div>
           <div className="text-gray-400 uppercase text-[9px] font-bold">Permissions API</div>
-          <div>camera: <span className="text-white">{debugState.cameraPermission}</span></div>
           <div>mic: <span className="text-white">{debugState.micPermission}</span></div>
         </div>
 
@@ -153,21 +136,16 @@ export default function MediaDebugPanel() {
           )}
         </div>
 
-        {/* Local Tracks */}
+        {/* Local Audio Tracks */}
         <div>
-          <div className="text-gray-400 uppercase text-[9px] font-bold">Local Tracks ({debugState.localTracks.length})</div>
+          <div className="text-gray-400 uppercase text-[9px] font-bold">Local Audio Tracks ({debugState.localTracks.length})</div>
           {debugState.localTracks.length === 0 ? (
-            <div className="text-gray-500 italic">No local tracks acquired</div>
+            <div className="text-gray-500 italic">No audio tracks acquired</div>
           ) : (
             debugState.localTracks.map(t => (
               <div key={t.id} className="p-1 my-1 bg-white/5 rounded border border-white/10">
                 <div className="text-white font-bold">{t.kind} [{t.readyState}]</div>
                 <div>enabled: {String(t.enabled)} | muted: <span className={t.muted ? 'text-red-400' : 'text-green-300'}>{String(t.muted)}</span></div>
-                {t.kind === 'video' && (
-                  <div className="text-[10px] text-gray-300">
-                    {t.width || '?'}x{t.height || '?'} @ {t.frameRate || '?'}fps ({t.facingMode || 'unknown'})
-                  </div>
-                )}
               </div>
             ))
           )}
@@ -175,7 +153,7 @@ export default function MediaDebugPanel() {
 
         {/* WebRTC Diagnostics */}
         <div>
-          <div className="text-gray-400 uppercase text-[9px] font-bold">WebRTC Path</div>
+          <div className="text-gray-400 uppercase text-[9px] font-bold">Voice Engine Path</div>
           {debugState.webrtcInfo ? (
             <div>
               <div>Engine: <span className="text-yellow-300 font-bold">{debugState.webrtcInfo.engine}</span></div>
@@ -192,7 +170,7 @@ export default function MediaDebugPanel() {
                     <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
                       <div className="text-gray-400">Last Action:</div>
                       <div>method: {debugState.webrtcInfo.diagnostics.lastAction.method}</div>
-                      <div>kind: {debugState.webrtcInfo.diagnostics.lastAction.trackKind} (published={String(debugState.webrtcInfo.diagnostics.lastAction.isPublished)})</div>
+                      <div>kind: {debugState.webrtcInfo.diagnostics.lastAction.trackKind}</div>
                       <div className="text-gray-400">{debugState.webrtcInfo.diagnostics.lastAction.timestamp}</div>
                     </div>
                   )}
@@ -229,7 +207,7 @@ export default function MediaDebugPanel() {
                       )}
                       <div>signaling: {c.signalingState} | polite: {String(c.polite)}</div>
                       <div className="text-[9px] text-gray-300 mt-1">
-                        <div className="font-semibold text-gray-400">Transceivers ({c.transceivers?.length || 0}):</div>
+                        <div className="font-semibold text-gray-400">Audio Transceivers ({c.transceivers?.length || 0}):</div>
                         {c.transceivers?.map((t, idx) => (
                           <div key={idx} className="pl-1">
                             mid={t.mid ?? 'null'}: {t.direction} (curr: {t.currentDirection || 'none'}) | sender: {t.senderTrackKind || 'none'}[{t.senderTrackReadyState || 'none'}] en={String(t.senderTrackEnabled)}
@@ -240,9 +218,8 @@ export default function MediaDebugPanel() {
                   ))}
                   {debugState.webrtcInfo.diagnostics?.lastToggle && (
                     <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
-                      <div className="text-gray-400">Last Mesh Toggle:</div>
+                      <div className="text-gray-400">Last Mesh Audio Toggle:</div>
                       <div>audio: {debugState.webrtcInfo.diagnostics.lastToggle.audioTrackKind || 'none'} [{debugState.webrtcInfo.diagnostics.lastToggle.audioTrackReadyState || 'none'}]</div>
-                      <div>video: {debugState.webrtcInfo.diagnostics.lastToggle.videoTrackKind || 'none'} [{debugState.webrtcInfo.diagnostics.lastToggle.videoTrackReadyState || 'none'}]</div>
                       <div>peers: {debugState.webrtcInfo.diagnostics.lastToggle.peers?.length || 0}</div>
                     </div>
                   )}

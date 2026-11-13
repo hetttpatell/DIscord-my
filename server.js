@@ -10,6 +10,16 @@ import { AccessToken } from 'livekit-server-sdk';
 import { getIceServerConfig, getTurnProviderStatus } from './server/iceConfig.js';
 import { roomStore, hashPassword, verifyPassword } from './server/roomStore.js';
 import { advanceQueue } from './server/queue.js';
+import {
+  generateRoomId,
+  generateResumeToken,
+  verifyResumeToken,
+  RoomRateLimiter,
+  sanitizePublicRoom,
+  MAX_ROOM_MEMBERS,
+  MIN_PASSWORD_LENGTH
+} from './server/roomModel.js';
+import { youtubeSearchService } from './server/youtubeSearch.js';
 
 dotenv.config();
 
@@ -36,6 +46,9 @@ app.use(express.json());
 // Key: roomId, Value: Room object
 const rooms = new Map();
 
+// Rate limiter for room password attempts: 5 failed attempts per 10 minutes per client
+const roomRateLimiter = new RoomRateLimiter();
+
 // Rehydrate stored rooms on boot from persistent storage (Redis or in-memory fallback)
 try {
   const storedRooms = await roomStore.loadAllRooms();
@@ -57,33 +70,6 @@ const AVATAR_COLORS = [
 
 function getRandomColor() {
   return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
-}
-
-// Server-issued random resume tokens (stored as SHA-256 hash server-side with room)
-function generateResumeToken() {
-  const token = crypto.randomBytes(24).toString('hex');
-  const hash = crypto.createHash('sha256').update(token).digest('hex');
-  return { token, hash };
-}
-
-function verifyResumeToken(token, expectedHash) {
-  if (!token || !expectedHash) return false;
-  try {
-    const hash = crypto.createHash('sha256').update(token).digest('hex');
-    const hashBuf = Buffer.from(hash, 'hex');
-    const expBuf = Buffer.from(expectedHash, 'hex');
-    if (hashBuf.length !== expBuf.length) return false;
-    return crypto.timingSafeEqual(hashBuf, expBuf);
-  } catch {
-    return false;
-  }
-}
-
-function isHostUser(room, socketId, user) {
-  if (!room) return false;
-  if (room.hostSocketId === socketId) return true;
-  if (user && user.clientId && room.hostId === user.clientId) return true;
-  return false;
 }
 
 // Compute accurate real-time position of current playback
@@ -174,51 +160,21 @@ app.post('/api/livekit/token', async (req, res) => {
   }
 });
 
-// Save API key to .env file and memory
-app.post('/api/youtube/save-key', (req, res) => {
-  const { key } = req.body;
-  if (!key || typeof key !== 'string') {
-    return res.status(400).json({ error: 'Key is required' });
-  }
-
-  process.env.YOUTUBE_API_KEY = key.trim();
-
-  // Save to .env file
-  try {
-    const envPath = path.resolve(process.cwd(), '.env');
-    let envContent = '';
-    if (fs.existsSync(envPath)) {
-      envContent = fs.readFileSync(envPath, 'utf8');
-      if (envContent.includes('YOUTUBE_API_KEY=')) {
-        envContent = envContent.replace(/YOUTUBE_API_KEY=.*/, `YOUTUBE_API_KEY=${key.trim()}`);
-      } else {
-        envContent += `\nYOUTUBE_API_KEY=${key.trim()}\n`;
-      }
-    } else {
-      envContent = `YOUTUBE_API_KEY=${key.trim()}\n`;
-    }
-    fs.writeFileSync(envPath, envContent, 'utf8');
-  } catch (err) {
-    console.warn('Could not write to .env:', err.message);
-  }
-
-  res.json({ success: true, message: 'YouTube API Key saved successfully' });
-});
-
 // Check room existence and password requirement
 app.get('/api/room/:roomId/check', (req, res) => {
   const { roomId } = req.params;
   const room = rooms.get(roomId?.toUpperCase());
   if (!room) {
-    return res.status(404).json({ exists: false, message: 'Room not found' });
+    return res.status(404).json({ exists: false, message: 'Room not found. Check the ID.' });
   }
+  const activeMembers = (room.members || []).filter(m => m.isOnline).length;
   res.json({
     exists: true,
     roomId: room.id,
     name: room.name,
-    hasPassword: Boolean(room.passwordHash || room.password),
-    membersCount: room.members.length,
-    waitingCount: room.waitingList.length,
+    hasPassword: Boolean(room.passwordHash),
+    membersCount: activeMembers,
+    isFull: activeMembers >= MAX_ROOM_MEMBERS,
     currentTrack: room.currentTrack
   });
 });
@@ -260,89 +216,33 @@ app.get('/api/youtube/oembed', async (req, res) => {
   }
 });
 
-// Helper to scrape YouTube search results without needing an API key
-async function searchYouTubeScrape(query) {
-  try {
-    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9'
-      }
-    });
-    if (!response.ok) return [];
-    const html = await response.text();
-    const match = html.match(/var ytInitialData = ({.*?});<\/script>/s) || html.match(/ytInitialData\s*=\s*({.+?});/);
-    if (!match) return [];
-    const data = JSON.parse(match[1]);
-    const contents = data.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || [];
-    const videos = [];
-    for (const section of contents) {
-      const items = section.itemSectionRenderer?.contents || [];
-      for (const item of items) {
-        const v = item.videoRenderer;
-        if (v && v.videoId) {
-          videos.push({
-            id: v.videoId,
-            title: v.title?.runs?.map(r => r.text).join('') || v.title?.simpleText || '',
-            channelTitle: v.ownerText?.runs?.map(r => r.text).join('') || '',
-            thumbnail: v.thumbnail?.thumbnails?.slice(-1)[0]?.url || `https://img.youtube.com/vi/${v.videoId}/hqdefault.jpg`,
-            duration: v.lengthText?.simpleText || ''
-          });
-        }
-      }
-    }
-    return videos;
-  } catch (err) {
-    console.error('YouTube scrape error:', err.message);
-    return [];
-  }
-}
-
-// Proxy YouTube Data API search with zero-API-key scrape fallback
+// YouTube search with caching, rate limiting, and structured error mapping
 app.get('/api/youtube/search', async (req, res) => {
-  const { q, key } = req.query;
-  const apiKey = key || process.env.YOUTUBE_API_KEY;
+  const { q, clientId, key } = req.query;
 
-  if (!q) {
-    return res.status(400).json({ error: 'Search query is required' });
+  if (!q || typeof q !== 'string' || q.trim().length < 2) {
+    return res.status(400).json({
+      error: 'INVALID_QUERY',
+      message: 'Search query must be at least 2 characters.',
+      items: []
+    });
   }
 
-  // 1. Try official YouTube Data API v3 if API key is provided
-  if (apiKey) {
-    try {
-      const apiUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=15&q=${encodeURIComponent(q)}&type=video&key=${apiKey}`;
-      const response = await fetch(apiUrl);
-      const data = await response.json();
-
-      if (!data.error && data.items && data.items.length > 0) {
-        const items = data.items.map(item => ({
-          id: item.id.videoId,
-          title: item.snippet.title,
-          channelTitle: item.snippet.channelTitle,
-          thumbnail: item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
-          publishedAt: item.snippet.publishedAt
-        }));
-        return res.json({ items, source: 'api' });
-      }
-      console.warn('YouTube API call returned error or empty, falling back to direct scrape:', data.error?.message);
-    } catch (apiErr) {
-      console.warn('YouTube API fetch failed, falling back to direct scrape:', apiErr.message);
-    }
+  if (key) {
+    youtubeSearchService.setApiKey(key);
   }
 
-  // 2. Direct scrape fallback (zero-API-key, unlimited quota)
-  try {
-    const scrapedItems = await searchYouTubeScrape(q);
-    if (scrapedItems.length > 0) {
-      return res.json({ items: scrapedItems, source: 'scrape' });
-    }
-  } catch (scrapeErr) {
-    console.error('YouTube scrape search failed:', scrapeErr.message);
+  const result = await youtubeSearchService.search({
+    query: q,
+    clientId: clientId || req.ip
+  });
+
+  if (result.error) {
+    const status = result.error === 'RATE_LIMITED' ? 429 : 400;
+    return res.status(status).json(result);
   }
 
-  // 3. Fallback to empty items
-  res.json({ items: [] });
+  res.json(result);
 });
 
 // Socket.IO Handling
@@ -351,36 +251,53 @@ io.on('connection', (socket) => {
   let currentUser = null;
 
   // 1. Create a new Room
-  socket.on('room:create', ({ roomId, roomName, password, userName, sessionId, clientId, requireApproval = true }, callback) => {
-    const id = (roomId || Math.random().toString(36).substring(2, 8)).toUpperCase();
+  socket.on('room:create', ({ roomName, password, userName, sessionId, clientId }, callback) => {
+    if (typeof callback !== 'function') return;
 
-    if (rooms.has(id)) {
-      return callback({ success: false, message: 'Room ID already exists. Try a different ID.' });
+    if (!password || typeof password !== 'string' || password.trim().length < MIN_PASSWORD_LENGTH) {
+      return callback({
+        success: false,
+        message: `Password is required (minimum ${MIN_PASSWORD_LENGTH} characters).`
+      });
     }
 
-    const stableClientId = clientId || sessionId || `client-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const cleanUserName = (userName || '').trim() || 'Host';
+    const stableClientId = clientId || sessionId || `tab-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+    // Generate unambiguous 6-character room ID from ABCDEFGHJKLMNPQRSTUVWXYZ23456789
+    let id = '';
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const candidate = generateRoomId(6);
+      if (!rooms.has(candidate)) {
+        id = candidate;
+        break;
+      }
+    }
+
+    if (!id) {
+      return callback({ success: false, message: 'Failed to allocate unique room ID. Please try again.' });
+    }
+
     const { token: resumeToken, hash: resumeTokenHash } = generateResumeToken();
+    const passwordHash = hashPassword(password.trim());
 
     const user = {
       clientId: stableClientId,
       sessionId: stableClientId,
       id: socket.id,
-      name: userName.trim() || 'Host',
+      name: cleanUserName,
       isHost: true,
       avatarColor: '#5865f2',
       isOnline: true,
       joinedAt: Date.now()
     };
 
-    const passwordHash = password ? hashPassword(password.trim()) : null;
-
     const newRoom = {
       id,
-      name: roomName.trim() || `afterspot Lounge`,
+      name: (roomName || '').trim() || `afterspot Lounge`,
       passwordHash,
       resumeTokens: { [stableClientId]: resumeTokenHash },
-      requireApproval: Boolean(requireApproval),
-      hostId: stableClientId, // Stable clientId stored in localStorage
+      hostId: stableClientId,
       hostSocketId: socket.id,
       hostSessionId: stableClientId,
       createdAt: Date.now(),
@@ -389,14 +306,8 @@ io.on('connection', (socket) => {
       playbackPosition: 0,
       lastStateChangeTime: Date.now(),
       queue: [],
-      history: [],
       members: [user],
-      waitingList: [], // Users waiting to join
-      chatMessages: [],
-      callParticipants: new Map(), // Active WebRTC call participants
-      settings: {
-        djMode: false
-      }
+      callParticipants: new Map()
     };
 
     rooms.set(id, newRoom);
@@ -407,40 +318,66 @@ io.on('connection', (socket) => {
 
     callback({
       success: true,
-      room: {
-        ...newRoom,
-        hasPassword: Boolean(newRoom.passwordHash)
-      },
+      room: sanitizePublicRoom(newRoom, 0),
       user,
       resumeToken
     });
   });
 
-  // 2. Request to Join or Direct Join
+  // 2. Request to Join Room
   socket.on('room:join', ({ roomId, password, userName, sessionId, clientId }, callback) => {
+    if (typeof callback !== 'function') return;
+
     const id = roomId ? roomId.trim().toUpperCase() : '';
     const room = rooms.get(id);
 
     if (!room) {
-      return callback({ success: false, message: 'Room does not exist. Check the ID.' });
+      return callback({ success: false, message: 'Room not found. Check the ID.' });
     }
 
-    if (room.passwordHash) {
-      if (!verifyPassword(password?.trim(), room.passwordHash)) {
-        return callback({ success: false, message: 'Incorrect room password.' });
-      }
-    } else if (room.password && room.password !== password?.trim()) {
+    const stableClientId = clientId || sessionId || `tab-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+    // Rate limit check: 5 failed attempts per room per client per 10 minutes
+    const rateCheck = roomRateLimiter.isRateLimited(id, stableClientId);
+    if (rateCheck.limited) {
+      return callback({
+        success: false,
+        message: `Too many failed attempts. Please wait ${rateCheck.waitMinutes} minute${rateCheck.waitMinutes === 1 ? '' : 's'} before trying again.`
+      });
+    }
+
+    // Password verification: required, min 4 chars, constant-time scrypt check
+    if (!password || typeof password !== 'string' || password.trim().length < MIN_PASSWORD_LENGTH) {
+      roomRateLimiter.recordFailure(id, stableClientId);
+      return callback({
+        success: false,
+        message: `Password is required (minimum ${MIN_PASSWORD_LENGTH} characters).`
+      });
+    }
+
+    if (!verifyPassword(password.trim(), room.passwordHash)) {
+      roomRateLimiter.recordFailure(id, stableClientId);
       return callback({ success: false, message: 'Incorrect room password.' });
     }
 
-    const stableClientId = clientId || sessionId || `client-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    // Password succeeded — clear rate limiter record for this client
+    roomRateLimiter.recordSuccess(id, stableClientId);
+
+    // Maximum 12 members cap check
+    const activeMembersCount = (room.members || []).filter(m => m.isOnline).length;
+    const isAlreadyMember = (room.members || []).some(m => m.clientId === stableClientId);
+    if (!isAlreadyMember && activeMembersCount >= MAX_ROOM_MEMBERS) {
+      return callback({ success: false, message: `Room is full (maximum ${MAX_ROOM_MEMBERS} members).` });
+    }
+
+    const cleanUserName = (userName || '').trim() || `Guest-${socket.id.substring(0, 4)}`;
     const { token: resumeToken, hash: resumeTokenHash } = generateResumeToken();
     if (!room.resumeTokens) room.resumeTokens = {};
     room.resumeTokens[stableClientId] = resumeTokenHash;
 
     const isHost = room.hostId === stableClientId || room.members.length === 0;
 
-    // Check if this session already exists as a member (reconnecting offline user or same socket)
+    // Check if this client already exists as a member (e.g. reconnecting offline user or same tab)
     const existingMember = room.members.find(m => 
       m.id === socket.id || (!m.isOnline && (m.clientId === stableClientId || m.sessionId === stableClientId))
     );
@@ -449,7 +386,7 @@ io.on('connection', (socket) => {
       existingMember.clientId = stableClientId;
       existingMember.isOnline = true;
       existingMember.disconnectedAt = null;
-      if (userName?.trim()) existingMember.name = userName.trim();
+      if (userName?.trim()) existingMember.name = cleanUserName;
       if (isHost) {
         existingMember.isHost = true;
         room.hostId = stableClientId;
@@ -465,65 +402,26 @@ io.on('connection', (socket) => {
 
       callback({
         success: true,
-        waiting: false,
-        room: {
-          ...room,
-          hasPassword: Boolean(room.passwordHash || room.password),
-          playbackPosition: accurateTime
-        },
+        room: sanitizePublicRoom(room, accurateTime),
         user: existingMember,
         resumeToken
       });
 
       io.to(id).emit('room:members-updated', {
-        members: room.members,
-        waitingList: room.waitingList
+        members: sanitizePublicRoom(room).members
       });
       return;
     }
 
-    // Also remove any stale entries for the same socket.id (edge case: same tab, no session)
+    // Remove any stale entries for the same socket.id (prevents duplicate entries)
     room.members = room.members.filter(m => m.id !== socket.id);
 
-    // Check if room requires host approval
-    if (room.requireApproval && room.hostId !== stableClientId && room.hostSocketId !== socket.id) {
-      const waitUser = {
-        clientId: stableClientId,
-        sessionId: stableClientId,
-        id: socket.id,
-        name: userName?.trim() || `Guest-${socket.id.substring(0, 4)}`,
-        avatarColor: getRandomColor(),
-        requestedAt: Date.now()
-      };
-
-      // Check if already in waiting list
-      if (!room.waitingList.some(w => w.id === socket.id || w.clientId === stableClientId)) {
-        room.waitingList.push(waitUser);
-      } else {
-        const existingWait = room.waitingList.find(w => w.clientId === stableClientId);
-        if (existingWait) existingWait.id = socket.id;
-      }
-
-      // Notify host about the waiting user
-      if (room.hostSocketId) {
-        io.to(room.hostSocketId).emit('room:waiting-list-updated', {
-          waitingList: room.waitingList
-        });
-      }
-
-      return callback({
-        success: true,
-        waiting: true,
-        message: 'You are in the waiting room. The host will admit you shortly.'
-      });
-    }
-
-    // Direct Join — fresh user
+    // Fresh user joining
     const user = {
       clientId: stableClientId,
       sessionId: stableClientId,
       id: socket.id,
-      name: userName?.trim() || `Guest-${socket.id.substring(0, 4)}`,
+      name: cleanUserName,
       isHost,
       avatarColor: getRandomColor(),
       isOnline: true,
@@ -545,29 +443,25 @@ io.on('connection', (socket) => {
 
     callback({
       success: true,
-      waiting: false,
-      room: {
-        ...room,
-        hasPassword: Boolean(room.passwordHash || room.password),
-        playbackPosition: accurateTime
-      },
+      room: sanitizePublicRoom(room, accurateTime),
       user,
       resumeToken
     });
 
     socket.to(id).emit('room:members-updated', {
-      members: room.members,
-      waitingList: room.waitingList
+      members: sanitizePublicRoom(room).members
     });
   });
 
   // 2b. Reconnect / Resume Session with stable clientId and server-issued resumeToken
   socket.on('room:resume', ({ roomId, sessionId, clientId, userName, resumeToken }, callback) => {
+    if (typeof callback !== 'function') return;
+
     const id = roomId ? roomId.trim().toUpperCase() : '';
     const room = rooms.get(id);
 
     if (!room) {
-      return callback({ success: false, message: 'Room no longer exists or has expired.' });
+      return callback({ success: false, message: 'Room not found or has expired.' });
     }
 
     const stableClientId = clientId || sessionId;
@@ -577,13 +471,11 @@ io.on('connection', (socket) => {
 
     const isHost = Boolean(room.hostId && room.hostId === stableClientId);
 
-    // Verify resumeToken if room is password-protected and user is not host
-    if (room.passwordHash || room.password) {
-      const storedTokenHash = room.resumeTokens?.[stableClientId];
-      const isTokenValid = Boolean(storedTokenHash && resumeToken && verifyResumeToken(resumeToken, storedTokenHash));
-      if (!isTokenValid && !isHost) {
-        return callback({ success: false, message: 'Session resume expired or invalid. Please rejoin.' });
-      }
+    // Verify resumeToken using constant-time comparison
+    const storedTokenHash = room.resumeTokens?.[stableClientId];
+    const isTokenValid = Boolean(storedTokenHash && resumeToken && verifyResumeToken(resumeToken, storedTokenHash));
+    if (!isTokenValid && !isHost) {
+      return callback({ success: false, message: 'Session resume expired or invalid. Please rejoin with password.' });
     }
 
     // Remove any stale entries for the same socket.id (prevents ghost duplicates)
@@ -609,7 +501,7 @@ io.on('connection', (socket) => {
         clientId: stableClientId,
         sessionId: stableClientId,
         id: socket.id,
-        name: userName?.trim() || 'Host',
+        name: (userName || '').trim() || 'Host',
         isHost: true,
         avatarColor: '#5865f2',
         isOnline: true,
@@ -618,13 +510,13 @@ io.on('connection', (socket) => {
       room.members.unshift(member);
       room.hostId = stableClientId;
       room.hostSocketId = socket.id;
-    } else if (!room.requireApproval || (room.resumeTokens && room.resumeTokens[stableClientId])) {
+    } else if (room.resumeTokens && room.resumeTokens[stableClientId]) {
       // Member reconnecting after restart
       member = {
         clientId: stableClientId,
         sessionId: stableClientId,
         id: socket.id,
-        name: userName?.trim() || `Guest-${socket.id.substring(0, 4)}`,
+        name: (userName || '').trim() || `Guest-${socket.id.substring(0, 4)}`,
         isHost: false,
         avatarColor: getRandomColor(),
         isOnline: true,
@@ -649,135 +541,14 @@ io.on('connection', (socket) => {
 
     callback({
       success: true,
-      room: {
-        ...room,
-        hasPassword: Boolean(room.passwordHash || room.password),
-        playbackPosition: accurateTime
-      },
+      room: sanitizePublicRoom(room, accurateTime),
       user: member,
       resumeToken: freshResumeToken
     });
 
     io.to(id).emit('room:members-updated', {
-      members: room.members,
-      waitingList: room.waitingList
+      members: sanitizePublicRoom(room).members
     });
-  });
-
-  // 3. Host: Approve a waiting user
-  socket.on('room:approve-user', ({ userId }) => {
-    if (!currentRoomId) return;
-    const room = rooms.get(currentRoomId);
-    if (!room || !isHostUser(room, socket.id, currentUser)) return;
-
-    const index = room.waitingList.findIndex(w => w.id === userId);
-    if (index === -1) return;
-
-    const [waitUser] = room.waitingList.splice(index, 1);
-
-    // Check if this session already exists as a member (prevent duplicates)
-    const existingMember = room.members.find(m => m.sessionId === waitUser.sessionId);
-    if (existingMember) {
-      existingMember.id = waitUser.id;
-      existingMember.isOnline = true;
-      existingMember.disconnectedAt = null;
-    } else {
-      const member = {
-        sessionId: waitUser.sessionId,
-        id: waitUser.id,
-        name: waitUser.name,
-        avatarColor: waitUser.avatarColor,
-        isHost: false,
-        isOnline: true,
-        joinedAt: Date.now()
-      };
-      room.members.push(member);
-    }
-
-    const approvedMember = room.members.find(m => m.id === waitUser.id);
-
-    // Join socket to room channel
-    const targetSocket = io.sockets.sockets.get(userId);
-    if (targetSocket) {
-      targetSocket.join(currentRoomId);
-      
-      const accurateTime = getRoomCurrentTime(room);
-      targetSocket.emit('room:approved', {
-        room: {
-          ...room,
-          hasPassword: Boolean(room.passwordHash || room.password),
-          playbackPosition: accurateTime
-        },
-        user: approvedMember
-      });
-    }
-
-    // Update room with new members and waiting list
-    io.to(currentRoomId).emit('room:members-updated', {
-      members: room.members,
-      waitingList: room.waitingList
-    });
-    socket.emit('room:waiting-list-updated', {
-      waitingList: room.waitingList
-    });
-  });
-
-  // 4. Host: Approve all waiting users
-  socket.on('room:approve-all', () => {
-    if (!currentRoomId) return;
-    const room = rooms.get(currentRoomId);
-    if (!room || !isHostUser(room, socket.id, currentUser)) return;
-
-    const accurateTime = getRoomCurrentTime(room);
-
-    while (room.waitingList.length > 0) {
-      const waitUser = room.waitingList.shift();
-      const member = {
-        id: waitUser.id,
-        name: waitUser.name,
-        avatarColor: waitUser.avatarColor,
-        isHost: false,
-        joinedAt: Date.now()
-      };
-      room.members.push(member);
-
-      const targetSocket = io.sockets.sockets.get(waitUser.id);
-      if (targetSocket) {
-        targetSocket.join(currentRoomId);
-        targetSocket.emit('room:approved', {
-          room: {
-            ...room,
-            hasPassword: Boolean(room.passwordHash || room.password),
-            playbackPosition: accurateTime
-          },
-          user: member
-        });
-      }
-    }
-
-    io.to(currentRoomId).emit('room:members-updated', {
-      members: room.members,
-      waitingList: room.waitingList
-    });
-    socket.emit('room:waiting-list-updated', {
-      waitingList: room.waitingList
-    });
-  });
-
-  // 5. Host: Reject a waiting user
-  socket.on('room:reject-user', ({ userId }) => {
-    if (!currentRoomId) return;
-    const room = rooms.get(currentRoomId);
-    if (!room || !isHostUser(room, socket.id, currentUser)) return;
-
-    room.waitingList = room.waitingList.filter(w => w.id !== userId);
-
-    const targetSocket = io.sockets.sockets.get(userId);
-    if (targetSocket) {
-      targetSocket.emit('room:rejected', { message: 'Your join request was declined by the host.' });
-    }
-
-    socket.emit('room:waiting-list-updated', { waitingList: room.waitingList });
   });
 
   // 6. Playback: Play
@@ -839,8 +610,8 @@ io.on('connection', (socket) => {
   });
 
   // 9. Play a video immediately
-  socket.on('player:set-track', ({ track }) => {
-    if (!currentRoomId) return;
+  const handleSetTrack = ({ track }) => {
+    if (!currentRoomId || !track) return;
     const room = rooms.get(currentRoomId);
     if (!room) return;
 
@@ -864,7 +635,10 @@ io.on('connection', (socket) => {
       serverTimestamp: Date.now(),
       triggeredBy: currentUser?.name || 'Host'
     });
-  });
+  };
+
+  socket.on('player:set-track', handleSetTrack);
+  socket.on('player:change-track', handleSetTrack);
 
   // 10. Queue: Add Track
   socket.on('queue:add', ({ track }) => {
@@ -930,12 +704,16 @@ io.on('connection', (socket) => {
   });
 
   // 12. Queue: Remove track
-  socket.on('queue:remove', ({ queueId }) => {
+  socket.on('queue:remove', ({ queueId, entryId }) => {
     if (!currentRoomId) return;
     const room = rooms.get(currentRoomId);
     if (!room) return;
 
-    room.queue = room.queue.filter(item => item.queueId !== queueId);
+    room.queue = room.queue.filter(item => {
+      if (entryId && item.entryId === entryId) return false;
+      if (queueId && (item.queueId === queueId || item.entryId === queueId)) return false;
+      return true;
+    });
     io.to(currentRoomId).emit('queue:updated', { queue: room.queue });
     roomStore.save(currentRoomId, room);
   });
@@ -963,180 +741,10 @@ io.on('connection', (socket) => {
   };
 
   socket.on('player:skip', handleAdvanceQueue);
+  socket.on('queue:skip', handleAdvanceQueue);
   socket.on('player:track-end', handleAdvanceQueue);
 
-  // 14. Chat: Send Message
-  socket.on('chat:message', ({ text }) => {
-    if (!currentRoomId || !text?.trim()) return;
-    const room = rooms.get(currentRoomId);
-    if (!room) return;
-
-    const msg = {
-      id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      senderId: socket.id,
-      sender: currentUser?.name || 'Guest',
-      senderColor: currentUser?.avatarColor || '#5865f2',
-      isHost: Boolean(currentUser?.isHost),
-      text: text.trim(),
-      timestamp: Date.now()
-    };
-
-    room.chatMessages.push(msg);
-    if (room.chatMessages.length > 100) room.chatMessages.shift();
-
-    io.to(currentRoomId).emit('chat:message', msg);
-  });
-
-  // 15. Reactions: Send Floating Emoji
-  socket.on('reaction:send', ({ emoji }) => {
-    if (!currentRoomId || !emoji) return;
-    io.to(currentRoomId).emit('reaction:received', {
-      id: `react-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      emoji,
-      sender: currentUser?.name || 'Friend',
-      timestamp: Date.now()
-    });
-  });
-
-  // 15b. Participant & Host Protocol Events (Meet Style)
-  socket.on('participant:hand-raise', ({ roomId, participantId, isRaised, name }) => {
-    const targetRoomId = roomId || currentRoomId;
-    if (!targetRoomId) return;
-    io.to(targetRoomId).emit('participant:hand-raised', {
-      participantId: participantId || socket.id,
-      isRaised: Boolean(isRaised),
-      name: name || currentUser?.name || 'Participant',
-      timestamp: Date.now()
-    });
-  });
-
-  socket.on('participant:reaction', ({ roomId, reaction, senderName }) => {
-    const targetRoomId = roomId || currentRoomId;
-    if (!targetRoomId || !reaction) return;
-    io.to(targetRoomId).emit('participant:reaction', {
-      id: `react-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      reaction,
-      senderName: senderName || currentUser?.name || 'Participant',
-      timestamp: Date.now()
-    });
-    // Also emit reaction:received for legacy components
-    io.to(targetRoomId).emit('reaction:received', {
-      id: `react-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      emoji: reaction,
-      sender: senderName || currentUser?.name || 'Participant',
-      timestamp: Date.now()
-    });
-  });
-
-  socket.on('host:mute-participant', ({ roomId, participantId }) => {
-    const targetRoomId = roomId || currentRoomId;
-    if (!targetRoomId || !participantId) return;
-    const room = rooms.get(targetRoomId);
-    if (!room || !isHostUser(room, socket.id, currentUser)) return;
-
-    io.to(targetRoomId).emit('host:mute-participant', {
-      participantId,
-      hostName: currentUser?.name || 'Host'
-    });
-  });
-
-  socket.on('host:mute-all', ({ roomId }) => {
-    const targetRoomId = roomId || currentRoomId;
-    if (!targetRoomId) return;
-    const room = rooms.get(targetRoomId);
-    if (!room || !isHostUser(room, socket.id, currentUser)) return;
-
-    io.to(targetRoomId).emit('host:mute-all', {
-      hostId: socket.id,
-      hostName: currentUser?.name || 'Host'
-    });
-  });
-
-  socket.on('host:lower-hand', ({ roomId, participantId }) => {
-    const targetRoomId = roomId || currentRoomId;
-    if (!targetRoomId || !participantId) return;
-    const room = rooms.get(targetRoomId);
-    if (!room || !isHostUser(room, socket.id, currentUser)) return;
-
-    io.to(targetRoomId).emit('host:lower-hand', {
-      participantId,
-      hostName: currentUser?.name || 'Host'
-    });
-    io.to(targetRoomId).emit('participant:hand-raised', {
-      participantId,
-      isRaised: false,
-      timestamp: Date.now()
-    });
-  });
-
-  socket.on('host:ask-to-unmute', ({ roomId, participantId }) => {
-    const targetRoomId = roomId || currentRoomId;
-    if (!targetRoomId || !participantId) return;
-    const room = rooms.get(targetRoomId);
-    if (!room || !isHostUser(room, socket.id, currentUser)) return;
-
-    io.to(targetRoomId).emit('host:ask-to-unmute', {
-      participantId,
-      hostName: currentUser?.name || 'Host'
-    });
-  });
-
-  socket.on('host:spotlight-participant', ({ roomId, participantId }) => {
-    const targetRoomId = roomId || currentRoomId;
-    if (!targetRoomId || !participantId) return;
-    const room = rooms.get(targetRoomId);
-    if (!room || !isHostUser(room, socket.id, currentUser)) return;
-
-    io.to(targetRoomId).emit('host:spotlight-participant', {
-      participantId,
-      hostName: currentUser?.name || 'Host'
-    });
-  });
-
-  // 16. Room Settings Update (DJ mode, etc.)
-  socket.on('settings:update', (newSettings) => {
-    if (!currentRoomId) return;
-    const room = rooms.get(currentRoomId);
-    if (!room || !isHostUser(room, socket.id, currentUser)) return;
-
-    room.settings = { ...room.settings, ...newSettings };
-    io.to(currentRoomId).emit('settings:updated', { settings: room.settings });
-  });
-
-  // 16b. Update Room Name (Host only)
-  socket.on('room:update-name', ({ name }, callback) => {
-    if (!currentRoomId || !name?.trim()) return;
-    const room = rooms.get(currentRoomId);
-    if (!room) return;
-
-    // Check if host
-    if (!isHostUser(room, socket.id, currentUser)) {
-      if (typeof callback === 'function') callback({ success: false, message: 'Only the host can rename the room.' });
-      return;
-    }
-
-    room.name = name.trim();
-    roomStore.save(currentRoomId, room);
-    io.to(currentRoomId).emit('room:name-updated', { name: room.name });
-    if (typeof callback === 'function') callback({ success: true, name: room.name });
-  });
-
-  // 16c. Update User Display Name (Nickname)
-  socket.on('user:update-name', ({ name }, callback) => {
-    if (!currentRoomId || !name?.trim() || !currentUser) return;
-    const room = rooms.get(currentRoomId);
-    if (!room) return;
-
-    currentUser.name = name.trim();
-    const member = room.members.find(m => m.id === socket.id || m.sessionId === currentUser.sessionId);
-    if (member) member.name = currentUser.name;
-
-    io.to(currentRoomId).emit('room:members-updated', { members: room.members });
-    socket.emit('user:updated', { user: currentUser });
-    if (typeof callback === 'function') callback({ success: true, name: currentUser.name });
-  });
-
-  // 17. WebRTC Voice & Video Call Signaling (Google Meet / Discord Style)
+  // WebRTC Audio Call Signaling
   socket.on('webrtc:join-call', (initialMediaState) => {
     if (!currentRoomId) return;
     const room = rooms.get(currentRoomId);
@@ -1151,8 +759,6 @@ io.on('connection', (socket) => {
       userName: currentUser?.name || 'Member',
       avatarColor: currentUser?.avatarColor || '#5865f2',
       isMuted: Boolean(initialMediaState?.isMuted ?? false),
-      isCameraOff: Boolean(initialMediaState?.isCameraOff ?? true),
-      isScreenSharing: Boolean(initialMediaState?.isScreenSharing ?? false),
       joinedAt: Date.now()
     };
 
@@ -1191,12 +797,12 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoomId);
     if (room && room.callParticipants && room.callParticipants.has(socket.id)) {
       const prev = room.callParticipants.get(socket.id);
-      room.callParticipants.set(socket.id, { ...prev, ...mediaState });
+      room.callParticipants.set(socket.id, { ...prev, isMuted: Boolean(mediaState?.isMuted) });
     }
 
     socket.to(currentRoomId).emit('webrtc:media-state-updated', {
       peerId: socket.id,
-      ...mediaState
+      isMuted: Boolean(mediaState?.isMuted)
     });
   });
 
@@ -1223,7 +829,6 @@ io.on('connection', (socket) => {
 
     // Remove user immediately on explicit leave
     room.members = room.members.filter(m => m.id !== socket.id);
-    room.waitingList = room.waitingList.filter(w => w.id !== socket.id);
 
     // If host left explicitly, transfer host to next online member or clear
     if (room.hostId === currentUser?.clientId || room.hostSocketId === socket.id) {
@@ -1246,9 +851,9 @@ io.on('connection', (socket) => {
       rooms.delete(currentRoomId);
       roomStore.delete(currentRoomId);
     } else {
+      roomStore.save(currentRoomId, room);
       io.to(currentRoomId).emit('room:members-updated', {
-        members: room.members,
-        waitingList: room.waitingList
+        members: sanitizePublicRoom(room).members
       });
     }
 
@@ -1274,19 +879,15 @@ io.on('connection', (socket) => {
       member.disconnectedAt = Date.now();
     }
 
+    roomStore.save(currentRoomId, room);
     io.to(currentRoomId).emit('room:members-updated', {
-      members: room.members,
-      waitingList: room.waitingList
+      members: sanitizePublicRoom(room).members
     });
-
-    // Also clean up any stale waiting list entries for this socket
-    room.waitingList = room.waitingList.filter(w => w.id !== socket.id);
 
     // Store roomId in closure for the timeout
     const disconnectedRoomId = currentRoomId;
 
     // 30-second grace period before cleaning up disconnected members
-    // (reduced from 2 min to avoid long ghost entries)
     setTimeout(() => {
       const checkRoom = rooms.get(disconnectedRoomId);
       if (!checkRoom) return;
@@ -1312,9 +913,9 @@ io.on('connection', (socket) => {
           checkRoom.hostSessionId = onlineMember.sessionId || onlineMember.id;
         }
 
+        roomStore.save(disconnectedRoomId, checkRoom);
         io.to(disconnectedRoomId).emit('room:members-updated', {
-          members: checkRoom.members,
-          waitingList: checkRoom.waitingList
+          members: sanitizePublicRoom(checkRoom).members
         });
       }
     }, 30000);

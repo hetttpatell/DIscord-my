@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 
-export default function InsecureContextBanner({ isSecureContext: propIsSecure }) {
+export default function InsecureContextBanner({ isSecureContext: propIsSecure } = {}) {
   const [dismissed, setDismissed] = useState(false);
 
-  // Directly evaluate window.isSecureContext
-  const isSecure = typeof window !== 'undefined'
-    ? (window.isSecureContext !== undefined ? Boolean(window.isSecureContext) : Boolean(propIsSecure))
-    : Boolean(propIsSecure);
+  // Directly evaluate window.isSecureContext or undefined navigator.mediaDevices
+  const isInsecure = typeof window !== 'undefined'
+    ? (!window.isSecureContext || typeof navigator === 'undefined' || !navigator.mediaDevices)
+    : (propIsSecure !== undefined ? !propIsSecure : false);
 
-  // If already secure context (https:// or localhost), don't show
-  if (isSecure || dismissed) return null;
+  // If already secure context (https:// or localhost) and mediaDevices exists, don't show
+  if (!isInsecure || dismissed) return null;
 
   return (
     <div className="fixed top-14 left-4 right-4 max-w-lg mx-auto z-50 bg-[#f2994a]/95 backdrop-blur-md text-black px-4 py-3 rounded-xl shadow-2xl border border-white/20 text-xs animate-fade-in">

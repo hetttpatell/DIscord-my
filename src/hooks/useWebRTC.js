@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import peerConnectionService from '../services/peerConnectionService';
 import livekitService from '../services/livekitService';
+import mediaService from '../services/mediaService';
 
 /**
  * Universal Unified Real-Time Communication Hook
@@ -30,6 +31,20 @@ export function useWebRTC({
       peerConnectionService.updateLocalStream(localStream);
     }
   }, [localStream, activeEngine, initialMediaState]);
+
+  // Handle system re-acquired tracks (mobile app switch / screen lock)
+  useEffect(() => {
+    const unsub = mediaService.subscribe((event, payload) => {
+      if (event === 'track-replaced' && payload?.newTrack) {
+        if (activeEngine === 'livekit') {
+          livekitService.republishTrack(payload.newTrack);
+        } else {
+          peerConnectionService.replaceLocalTrack(payload.oldTrack, payload.newTrack);
+        }
+      }
+    });
+    return () => unsub();
+  }, [activeEngine]);
 
   useEffect(() => {
     if (!isCallActive) return;

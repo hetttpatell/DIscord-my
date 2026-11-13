@@ -88,6 +88,22 @@ All notable improvements and architectural hardening applied to **afterspot** (T
   - Verified LiveKit audio uniqueness in `RemoteAudioLayer.jsx` preventing duplicate `<audio>` elements.
   - Created automated concurrency verification test `scripts/verify-queue.mjs` (4 duplicate track-ends simulated; asserted exactly 1 advance accepted).
 
+### Mobile Media & Hardware Lifecycle Hardening
+- **Diagnostic Hypotheses (Unverified)**:
+  - *Gesture-token expiration*: The theory that mobile browsers expired transient user-activation tokens across asynchronous setup calls before invoking `getUserMedia` is an unverified hypothesis, not a confirmed cause.
+  - *Errors produced on the phone*: The specific list of error codes reported on mobile devices (`NotAllowedError`, `NotFoundError`, `NotReadableError`, `OverconstrainedError`, `SecurityError`) are unverified hypotheses regarding actual device behavior, not confirmed causes.
+- **Files Modified**: `src/services/mediaService.js`, `src/components/MediaDebugPanel.jsx` (New), `src/components/MeetingLobby.jsx`, `src/components/InsecureContextBanner.jsx`, `src/services/peerConnectionService.js`, `src/services/livekitService.js`, `src/hooks/useLocalMedia.js`, `src/hooks/useWebRTC.js`, `src/components/VideoTile.jsx`, `src/App.jsx`
+- **Factual Code Changes**:
+  - Implemented live `MediaDebugPanel` activated with `?debug=1` tracking permissions, security context, last getUserMedia error, local track settings, and WebRTC sender stats.
+  - Mapped specific error codes (`NotAllowedError`, `NotFoundError`, `NotReadableError`, `OverconstrainedError`, and `InsecureContextError`) with in-context user guidance and an immediate "Retry" button.
+  - Wrapped `navigator.mediaDevices.getUserMedia` so an undefined `mediaDevices` throws `InsecureContextError` mapped directly to `InsecureContextBanner`.
+  - Eliminated preliminary async awaits before `callGetUserMedia` calls to invoke media acquisition immediately on user interaction.
+  - Enforced ideal-only video constraint fallback chain (`640x360@24fps (max 30)` -> `facingMode` -> bare video) avoiding overconstraint errors on mobile sensors.
+  - Added permissions query `onchange` listeners to auto-acquire tracks upon permission grant in browser settings.
+  - Implemented mobile lifecycle listeners on `visibilitychange` and `window.focus` guarded against permission denials, throttled to 1 attempt per 3 seconds, and stopped after 3 consecutive failures until the user taps Retry.
+  - Hardened camera publishing in mesh by updating transceivers and triggering renegotiation, and updated `applyVideoBitrateCap` to check for non-empty encodings.
+  - Enhanced `VideoTile.jsx` to retry playback on `loadedmetadata` and log diagnostic warnings when video tracks exist but avatars are displayed.
+
 ---
 
 ## Manual QA Verification Checklist

@@ -17,6 +17,7 @@ import {
 import mediaService from '../services/mediaService';
 import peerConnectionService from '../services/peerConnectionService';
 import livekitService from '../services/livekitService';
+import InsecureContextBanner from './InsecureContextBanner';
 
 export default function MeetingLobby({
   initialRoomId = '',
@@ -36,15 +37,19 @@ export default function MeetingLobby({
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [permissionError, setPermissionError] = useState(null);
+  const [lastFailedAction, setLastFailedAction] = useState(null); // 'mic' | 'camera'
+  const [showInsecureBanner, setShowInsecureBanner] = useState(false);
   const [isSecureContext, setIsSecureContext] = useState(
-    typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false
+    typeof window !== 'undefined' ? (Boolean(window.isSecureContext) && typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices)) : false
   );
 
   const previewVideoRef = useRef(null);
 
   // Initialize and subscribe to mediaService
   useEffect(() => {
-    setIsSecureContext(typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false);
+    setIsSecureContext(
+      typeof window !== 'undefined' ? (Boolean(window.isSecureContext) && typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices)) : false
+    );
 
     const unsub = mediaService.subscribe((event, payload, state) => {
       if (event === 'state-changed') {
@@ -60,7 +65,9 @@ export default function MeetingLobby({
           }
         }
       } else if (event === 'error') {
-        setPermissionError(payload.message);
+        if (payload?.type !== 'OVERCONSTRAINED') {
+          setPermissionError(payload);
+        }
       }
     });
 
@@ -80,33 +87,74 @@ export default function MeetingLobby({
   }, [isCameraOn]);
 
   const handleToggleMic = async () => {
+    mediaService.resetReacquireGuard();
     setPermissionError(null);
+    setLastFailedAction('mic');
     try {
       const track = await mediaService.toggleMic();
       if (track) {
         setIsMicOn(track.enabled);
-      } else if (mediaService.lastError) {
-        setPermissionError(mediaService.lastError.message);
+        setLastFailedAction(null);
+      } else if (mediaService.lastError && mediaService.lastError.type !== 'OVERCONSTRAINED') {
+        if (mediaService.lastError.name === 'InsecureContextError') {
+          setShowInsecureBanner(true);
+        } else {
+          setPermissionError(mediaService.lastError);
+        }
       }
     } catch (e) {
-      setPermissionError(e.message);
+      if (e.name === 'InsecureContextError') {
+        setShowInsecureBanner(true);
+      } else {
+        const parsed = mediaService.parseMediaError(e, 'audio');
+        if (parsed.name === 'InsecureContextError') {
+          setShowInsecureBanner(true);
+        } else if (parsed.type !== 'OVERCONSTRAINED') {
+          setPermissionError(parsed);
+        }
+      }
     }
   };
 
   const handleToggleCamera = async () => {
+    mediaService.resetReacquireGuard();
     setPermissionError(null);
+    setLastFailedAction('camera');
     try {
       const track = await mediaService.toggleCamera();
       if (track) {
         setIsCameraOn(true);
+        setLastFailedAction(null);
       } else {
         setIsCameraOn(false);
-        if (mediaService.lastError) {
-          setPermissionError(mediaService.lastError.message);
+        if (mediaService.lastError && mediaService.lastError.type !== 'OVERCONSTRAINED') {
+          if (mediaService.lastError.name === 'InsecureContextError') {
+            setShowInsecureBanner(true);
+          } else {
+            setPermissionError(mediaService.lastError);
+          }
         }
       }
     } catch (e) {
-      setPermissionError(e.message);
+      if (e.name === 'InsecureContextError') {
+        setShowInsecureBanner(true);
+      } else {
+        const parsed = mediaService.parseMediaError(e, 'video');
+        if (parsed.name === 'InsecureContextError') {
+          setShowInsecureBanner(true);
+        } else if (parsed.type !== 'OVERCONSTRAINED') {
+          setPermissionError(parsed);
+        }
+      }
+    }
+  };
+
+  const handleRetry = () => {
+    mediaService.resetReacquireGuard();
+    if (lastFailedAction === 'camera') {
+      handleToggleCamera();
+    } else {
+      handleToggleMic();
     }
   };
 
@@ -115,7 +163,16 @@ export default function MeetingLobby({
     try {
       await mediaService.switchCamera();
     } catch (e) {
-      setPermissionError(e.message);
+      if (e.name === 'InsecureContextError') {
+        setShowInsecureBanner(true);
+      } else {
+        const parsed = mediaService.parseMediaError(e, 'video');
+        if (parsed.name === 'InsecureContextError') {
+          setShowInsecureBanner(true);
+        } else if (parsed.type !== 'OVERCONSTRAINED') {
+          setPermissionError(parsed);
+        }
+      }
     }
   };
 
@@ -240,16 +297,24 @@ export default function MeetingLobby({
           </div>
 
           {permissionError && (
-            <div className="w-full mt-2 p-3 rounded-xl bg-[#ea4335]/15 border border-[#ea4335]/30 text-xs text-[#f28b82] flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>{permissionError}</span>
+            <div className="w-full mt-2 p-3 rounded-xl bg-[#ea4335]/15 border border-[#ea4335]/30 text-xs text-[#f28b82] flex items-center justify-between gap-3 animate-fade-in">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>{typeof permissionError === 'string' ? permissionError : permissionError.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleRetry}
+                className="px-2.5 py-1 rounded-lg bg-[#ea4335] hover:bg-[#d93025] text-white text-[11px] font-bold shadow transition-all active:scale-95 flex-shrink-0 cursor-pointer"
+              >
+                Retry
+              </button>
             </div>
           )}
 
-          {!isSecureContext && (
-            <div className="w-full mt-2 p-3 rounded-xl bg-[#f2994a]/15 border border-[#f2994a]/30 text-xs text-[#f2994a] flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>LAN HTTP Detected: Mobile browsers require HTTPS for camera and microphone outside localhost.</span>
+          {(!isSecureContext || showInsecureBanner) && (
+            <div className="w-full mt-2">
+              <InsecureContextBanner />
             </div>
           )}
         </div>

@@ -20,12 +20,25 @@ export default function VideoTile({
 
   // Check if live video track is present
   const videoTracks = stream ? stream.getVideoTracks() : [];
+  const primaryVideoTrack = videoTracks[0] || null;
   const hasLiveVideoTrack = Boolean(
     stream &&
-    videoTracks.length > 0 &&
-    videoTracks.some(t => t.readyState === 'live') &&
+    primaryVideoTrack &&
+    primaryVideoTrack.readyState === 'live' &&
     !isCameraOff
   );
+
+  // If the video track exists but the tile still shows the avatar, log the reason
+  useEffect(() => {
+    if (primaryVideoTrack && !hasLiveVideoTrack) {
+      console.debug(`[VideoTile] Video track exists but tile shows avatar (${userName}):`, {
+        muted: primaryVideoTrack.muted,
+        readyState: primaryVideoTrack.readyState,
+        enabled: primaryVideoTrack.enabled,
+        isCameraOff
+      });
+    }
+  }, [primaryVideoTrack, hasLiveVideoTrack, userName, isCameraOff]);
 
   // Bind video stream
   useEffect(() => {
@@ -36,12 +49,16 @@ export default function VideoTile({
       if (videoEl.srcObject !== stream) {
         videoEl.srcObject = stream;
       }
-      const playPromise = videoEl.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(err => {
-          console.debug('[VideoTile] Video play deferred:', err.name);
-        });
-      }
+      const tryPlay = () => {
+        const playPromise = videoEl.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(err => {
+            console.debug('[VideoTile] Video play deferred:', err.name);
+          });
+        }
+      };
+      tryPlay();
+      videoEl.addEventListener('loadedmetadata', tryPlay, { once: true });
     } else {
       videoEl.srcObject = null;
     }

@@ -74,10 +74,10 @@ export default function JoinCreateModal({
 
   const handleEnableMic = async () => {
     setMicErrorMessage(null);
-    peerConnectionService.unlockAudio();
-    livekitService.startAudio();
     try {
       const track = await mediaService.acquireAudioTrack();
+      peerConnectionService.unlockAudio();
+      livekitService.startAudio();
       if (track) {
         setIsMicReady(true);
       } else if (mediaService.lastError) {

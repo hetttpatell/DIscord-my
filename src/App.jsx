@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Navbar from './components/Navbar';
 import CommonScreen from './components/CommonScreen';
 import JoinCreateModal from './components/JoinCreateModal';
+import MediaDebugPanel from './components/MediaDebugPanel';
 import socket, { getBackendUrl } from './services/socket';
 import { getClientId } from './services/clientId';
 import { Radio } from 'lucide-react';
@@ -324,6 +325,9 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 h-full h-[100dvh] w-full bg-[#1e1f22] text-[#dbdee1] flex flex-col antialiased overflow-hidden overscroll-none select-none">
+      {/* Live Media Diagnostics Panel (?debug=1) */}
+      <MediaDebugPanel />
+
       {/* Toast Alert */}
       {toast && (
         <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 animate-fade-in pointer-events-none">

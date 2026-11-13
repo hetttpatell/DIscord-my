@@ -29,11 +29,14 @@ const DEFAULT_ICE_CONFIG = {
 
 // Cap video sender bitrate to ~400kbps to protect client CPU and mesh bandwidth
 async function applyVideoBitrateCap(sender, maxBitrate = 400000) {
-  if (!sender || typeof sender.getParameters !== 'function') return;
+  if (!sender || typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') return;
   try {
-    const params = sender.getParameters();
-    if (!params.encodings || params.encodings.length === 0) {
-      params.encodings = [{}];
+    let params = sender.getParameters();
+    if (!params || !params.encodings || params.encodings.length === 0) {
+      params = sender.getParameters();
+    }
+    if (!params || !params.encodings || params.encodings.length === 0) {
+      return; // Do not call setParameters if encodings array is empty
     }
     params.encodings[0].maxBitrate = maxBitrate;
     await sender.setParameters(params);
@@ -155,21 +158,21 @@ class PeerConnectionService {
   /**
    * Update local stream tracks across all active peer connections
    */
-  updateLocalStream(newStream) {
+  async updateLocalStream(newStream) {
     this.localStream = newStream;
     if (!this.isCallActive) return;
 
     const tracks = newStream ? newStream.getTracks() : [];
 
     let peerIndex = 0;
-    for (const record of this.peerConnections.values()) {
+    for (const [peerId, record] of this.peerConnections.entries()) {
       const pc = record.pc;
       if (!pc || pc.signalingState === 'closed') continue;
 
       const allowVideo = peerIndex < 4;
       peerIndex++;
 
-      const senders = pc.getSenders();
+      const senders = typeof pc.getSenders === 'function' ? pc.getSenders() : [];
 
       // Audio track sync
       const audioTrack = tracks.find(t => t.kind === 'audio' && t.readyState === 'live');
@@ -188,23 +191,86 @@ class PeerConnectionService {
 
       // Video track sync (capped at 4 peers, forced audio-only beyond 4, maxBitrate 400k)
       const videoTrack = tracks.find(t => t.kind === 'video' && t.readyState === 'live');
-      const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-      if (videoSender) {
-        if (!allowVideo) {
-          videoSender.replaceTrack(null).catch(() => {});
-        } else {
-          videoSender.replaceTrack(videoTrack || null).then(() => {
-            applyVideoBitrateCap(videoSender, 400000);
-          }).catch(err => {
-            console.warn('[WebRTC] Video replaceTrack error:', err);
-          });
+      
+      const videoTransceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
+        (t.sender.track && t.sender.track.kind === 'video') ||
+        (t.receiver.track && t.receiver.track.kind === 'video')
+      ) : null;
+
+      if (videoTransceiver) {
+        const targetDirection = (allowVideo && videoTrack) ? 'sendrecv' : (allowVideo ? 'recvonly' : 'inactive');
+        if (videoTransceiver.direction !== targetDirection) {
+          videoTransceiver.direction = targetDirection;
         }
+        videoTransceiver.sender.replaceTrack(allowVideo ? (videoTrack || null) : null).then(() => {
+          if (allowVideo && videoTrack) {
+            applyVideoBitrateCap(videoTransceiver.sender, 400000);
+          }
+        }).catch(err => {
+          console.warn('[WebRTC] Video replaceTrack error:', err);
+        });
       } else if (videoTrack && allowVideo) {
         try {
           const sender = pc.addTrack(videoTrack, newStream);
           if (sender) applyVideoBitrateCap(sender, 400000);
         } catch (e) {
           console.debug('[WebRTC] Add video track error:', e);
+        }
+      }
+
+      // In mesh: renegotiate using existing perfect-negotiation code if new track was attached
+      if (videoTrack && allowVideo && pc.signalingState === 'stable' && !record.makingOffer) {
+        this.triggerRenegotiation(peerId, record).catch(() => {});
+      }
+    }
+  }
+
+  /**
+   * Renegotiate connection using Perfect Negotiation offer
+   */
+  async triggerRenegotiation(peerId, record) {
+    const pc = record.pc;
+    if (!pc || pc.signalingState !== 'stable' || record.makingOffer) return;
+    try {
+      record.makingOffer = true;
+      await pc.setLocalDescription();
+      socket.emit('webrtc:signal', {
+        to: peerId,
+        signal: pc.localDescription,
+        type: 'offer'
+      });
+    } catch (err) {
+      console.warn(`[WebRTC] Renegotiation error with ${peerId}:`, err);
+    } finally {
+      record.makingOffer = false;
+    }
+  }
+
+  /**
+   * Replace track across all active peer senders (e.g. on mobile lifecycle resume)
+   */
+  async replaceLocalTrack(oldTrack, newTrack) {
+    this.localStream = mediaService.localStream;
+    const kind = newTrack?.kind || oldTrack?.kind;
+    if (!kind) return;
+
+    for (const [peerId, record] of this.peerConnections.entries()) {
+      const pc = record.pc;
+      if (!pc || pc.signalingState === 'closed') continue;
+
+      const transceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
+        (t.sender.track && (t.sender.track.id === oldTrack?.id || t.sender.track.kind === kind)) ||
+        (t.receiver.track && t.receiver.track.kind === kind)
+      ) : null;
+
+      if (transceiver) {
+        try {
+          await transceiver.sender.replaceTrack(newTrack || null);
+          if (kind === 'video' && newTrack) {
+            applyVideoBitrateCap(transceiver.sender, 400000);
+          }
+        } catch (err) {
+          console.warn(`[WebRTC] replaceLocalTrack error on peer ${peerId}:`, err);
         }
       }
     }
@@ -726,6 +792,28 @@ class PeerConnectionService {
 
     this.autoplayBlocked = false;
     this.notify('autoplay-changed', false);
+  }
+
+  getDiagnostics() {
+    const connections = [];
+    for (const [peerId, record] of this.peerConnections.entries()) {
+      const pc = record.pc;
+      if (!pc) continue;
+      const senders = (typeof pc.getSenders === 'function' ? pc.getSenders() : []).map(s => ({
+        kind: s.track ? s.track.kind : (s.kind || 'unknown'),
+        trackId: s.track?.id || null
+      }));
+      connections.push({
+        peerId,
+        connectionState: pc.connectionState,
+        iceConnectionState: pc.iceConnectionState,
+        senders
+      });
+    }
+    return {
+      engine: 'mesh',
+      connections
+    };
   }
 }
 

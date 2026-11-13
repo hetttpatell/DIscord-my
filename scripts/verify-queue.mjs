@@ -1,5 +1,6 @@
 import assert from 'node:assert';
 import crypto from 'node:crypto';
+import { advanceQueue } from '../server/queue.js';
 
 /**
  * Queue Verification Script
@@ -23,38 +24,6 @@ function createTestRoom() {
     playbackPosition: 354,
     lastStateChangeTime: Date.now()
   };
-}
-
-function advanceQueue(room, payload, broadcastLog = []) {
-  const payloadEntryId = payload?.entryId;
-  const currentEntryId = room.currentTrack?.entryId;
-
-  // Return without effect unless entryId matches current playing track
-  if (!payloadEntryId || !currentEntryId || payloadEntryId !== currentEntryId) {
-    return false; // Rejected race condition
-  }
-
-  if (room.queue.length > 0) {
-    const nextTrack = room.queue.shift();
-    if (!nextTrack.entryId) {
-      nextTrack.entryId = crypto.randomUUID();
-    }
-    room.currentTrack = nextTrack;
-    room.isPlaying = true;
-    room.playbackPosition = 0;
-    room.lastStateChangeTime = Date.now();
-
-    broadcastLog.push({ event: 'player:track-change', track: room.currentTrack });
-    return true; // Accepted advance
-  } else {
-    room.currentTrack = null;
-    room.isPlaying = false;
-    room.playbackPosition = 0;
-    room.lastStateChangeTime = Date.now();
-
-    broadcastLog.push({ event: 'player:track-change', track: null });
-    return true; // Advanced to end of queue
-  }
 }
 
 console.log('====================================================');
@@ -81,9 +50,10 @@ let acceptedCount = 0;
 let rejectedCount = 0;
 
 for (const evt of incomingEvents) {
-  const advanced = advanceQueue(room, evt, broadcastLog);
-  if (advanced) {
+  const result = advanceQueue(room, evt.entryId);
+  if (result.advanced) {
     acceptedCount++;
+    broadcastLog.push({ event: 'player:track-change', track: room.currentTrack });
     console.log(`[ADVANCED] ${evt.client}: Accepted advanceQueue for entryId ${evt.entryId}`);
   } else {
     rejectedCount++;

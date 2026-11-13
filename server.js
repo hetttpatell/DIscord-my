@@ -9,6 +9,7 @@ import crypto from 'crypto';
 import { AccessToken } from 'livekit-server-sdk';
 import { getIceServerConfig } from './server/iceConfig.js';
 import { roomStore, hashPassword, verifyPassword } from './server/roomStore.js';
+import { advanceQueue } from './server/queue.js';
 
 dotenv.config();
 
@@ -932,57 +933,29 @@ io.on('connection', (socket) => {
   });
 
   // 13. Queue: Play next (Skip / Track End)
-  const advanceQueue = (payload) => {
+  const handleAdvanceQueue = (payload) => {
     if (!currentRoomId) return;
     const room = rooms.get(currentRoomId);
     if (!room) return;
 
-    const payloadEntryId = payload?.entryId;
-    const currentEntryId = room.currentTrack?.entryId;
+    const endedEntryId = payload?.entryId;
+    const { advanced } = advanceQueue(room, endedEntryId);
 
-    // Return without effect unless entryId matches current playing track
-    if (!payloadEntryId || !currentEntryId || payloadEntryId !== currentEntryId) {
-      return;
-    }
-
-    if (room.queue.length > 0) {
-      const nextTrack = room.queue.shift();
-      if (!nextTrack.entryId) {
-        nextTrack.entryId = crypto.randomUUID();
-      }
-      room.currentTrack = nextTrack;
-      room.isPlaying = true;
-      room.playbackPosition = 0;
-      room.lastStateChangeTime = Date.now();
-
+    if (advanced) {
       io.to(currentRoomId).emit('player:track-change', {
         currentTrack: room.currentTrack,
-        isPlaying: true,
+        isPlaying: room.isPlaying,
         playbackPosition: 0,
         serverTimestamp: Date.now(),
         triggeredBy: 'Autoplay'
       });
       io.to(currentRoomId).emit('queue:updated', { queue: room.queue });
-    } else {
-      room.currentTrack = null;
-      room.isPlaying = false;
-      room.playbackPosition = 0;
-      room.lastStateChangeTime = Date.now();
-
-      io.to(currentRoomId).emit('player:track-change', {
-        currentTrack: null,
-        isPlaying: false,
-        playbackPosition: 0,
-        serverTimestamp: Date.now(),
-        triggeredBy: 'Autoplay'
-      });
-      io.to(currentRoomId).emit('queue:updated', { queue: room.queue });
+      roomStore.save(currentRoomId, room);
     }
-    roomStore.save(currentRoomId, room);
   };
 
-  socket.on('player:skip', advanceQueue);
-  socket.on('player:track-end', advanceQueue);
+  socket.on('player:skip', handleAdvanceQueue);
+  socket.on('player:track-end', handleAdvanceQueue);
 
   // 14. Chat: Send Message
   socket.on('chat:message', ({ text }) => {

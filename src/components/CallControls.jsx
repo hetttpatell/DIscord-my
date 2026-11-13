@@ -19,6 +19,7 @@ import {
   ChevronUp,
   Check,
   Copy,
+  Share2,
   Info,
   Keyboard,
   Sparkles,
@@ -310,11 +311,32 @@ export default function CallControls({
     isPeopleOpen
   ]);
 
-  const copyMeetingLink = () => {
+  const copyMeetingLink = async () => {
     if (typeof window === 'undefined') return;
-    navigator.clipboard.writeText(window.location.href);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
+    const inviteUrl = window.location.href;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `${room?.name || 'afterspot Lounge'} Meeting`,
+          text: 'Join our video meeting on afterspot:',
+          url: inviteUrl
+        });
+        onToast?.({ type: 'device', message: 'Meeting link shared!' });
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopiedLink(true);
+      onToast?.({ type: 'device', message: 'Meeting link copied to clipboard!' });
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch {
+      onToast?.({ type: 'device', message: 'Failed to copy link.' });
+    }
   };
 
   const reactionsList = ['💖', '👍', '🎉', '👏', '😂', '😮'];
@@ -368,18 +390,19 @@ export default function CallControls({
             </span>
             <span className="h-4 w-px bg-[#5f6368]/40" />
             
-            <div className="flex items-center gap-1.5 text-xs text-[#9aa0a6] truncate max-w-[180px]">
+            <div className="flex items-center gap-2 text-xs text-[#9aa0a6] truncate max-w-[200px]">
               <span className="truncate font-medium text-[#e8eaed]">
                 {room?.name || room?.id || 'afterspot'}
               </span>
               <button
                 type="button"
                 onClick={copyMeetingLink}
-                className="w-7 h-7 rounded-full flex items-center justify-center text-[#9aa0a6] hover:text-[#e8eaed] hover:bg-[#3c4043] transition-colors"
-                title="Copy meeting link"
-                aria-label="Copy meeting link"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#3c4043]/70 hover:bg-[#3c4043] border border-[#5f6368]/40 text-[#8ab4f8] text-[11px] font-semibold transition-all active:scale-95 cursor-pointer shrink-0"
+                title="Share room link"
+                aria-label="Share room link"
               >
-                {copiedLink ? <Check className="w-3.5 h-3.5 text-[#34a853]" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedLink ? <Check className="w-3 h-3 text-[#34a853]" /> : <Share2 className="w-3 h-3" />}
+                <span>{copiedLink ? 'Copied' : 'Share'}</span>
               </button>
             </div>
           </div>
@@ -717,6 +740,17 @@ export default function CallControls({
 
                   {/* Actions & Dialogs */}
                   <div className="py-1">
+                    <button
+                      type="button"
+                      onClick={() => { copyMeetingLink(); setShowMoreMenu(false); }}
+                      className="w-full px-3.5 py-1.5 flex items-center justify-between hover:bg-[#3c4043]/70 text-left text-xs cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Share2 className="w-4 h-4 text-[#8ab4f8]" />
+                        <span>Share room link</span>
+                      </div>
+                      <span className="text-[10px] text-[#8ab4f8] font-bold">Invite</span>
+                    </button>
                     {onToggleFullscreen && (
                       <button
                         type="button"
@@ -887,6 +921,24 @@ export default function CallControls({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Share Room Link Card (Mobile) */}
+            <button
+              type="button"
+              onClick={() => {
+                copyMeetingLink();
+                setShowMobileMoreSheet(false);
+              }}
+              className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-[#8ab4f8]/15 border border-[#8ab4f8]/30 text-[#8ab4f8] text-xs font-bold transition-all active:scale-95 cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5">
+                <Share2 className="w-4 h-4" />
+                <span>Share room link to invite others</span>
+              </div>
+              <span className="text-[11px] bg-[#8ab4f8] text-[#202124] px-2.5 py-1 rounded-full font-bold shadow-sm">
+                {copiedLink ? 'Copied!' : 'Share'}
+              </span>
+            </button>
 
             {/* Reactions row */}
             <div className="py-1">

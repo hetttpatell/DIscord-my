@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
-  ArrowLeft,
-  Copy,
+  Share2,
   Check,
+  Video,
   Tv,
   LayoutGrid,
   ScreenShare,
@@ -506,15 +506,65 @@ export default function VideoCallGrid({
     } catch {}
   };
 
-  // Invite URL copy / share helpers
+  // Prevent accidental back navigation or tab close from exiting the room
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // Push a state so history has a buffer and back gesture is trapped
+    window.history.pushState({ inMeeting: true }, '', window.location.href);
+
+    const handlePopState = () => {
+      // Re-push state so user stays in the meeting
+      window.history.pushState({ inMeeting: true }, '', window.location.href);
+      addToast({
+        type: 'device',
+        message: 'To leave the meeting, please use the red Exit button at the bottom.'
+      });
+    };
+
+    const handleBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [addToast]);
+
+  // Invite URL copy / share helpers (native Web Share API with clipboard fallback)
   const inviteUrl = typeof window !== 'undefined' ? `${window.location.origin}/?room=${room?.id || ''}` : '';
 
-  const copyInviteLink = () => {
+  const handleShareLink = useCallback(async () => {
     if (!inviteUrl) return;
-    navigator.clipboard.writeText(inviteUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: `${room?.name || 'afterspot Lounge'} Meeting`,
+          text: 'Join our video meeting on afterspot:',
+          url: inviteUrl
+        });
+        addToast({ type: 'device', message: 'Meeting link shared!' });
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopied(true);
+      addToast({ type: 'device', message: 'Meeting link copied to clipboard!' });
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      addToast({ type: 'device', message: 'Failed to copy link.' });
+    }
+  }, [inviteUrl, room, addToast]);
 
   // Combine store participants and ensure local user is included
   const currentUserId = currentUser?.id || 'local';
@@ -715,15 +765,15 @@ export default function VideoCallGrid({
 
       {/* 1. TOP HEADER BAR */}
       <div className="h-12 px-3 sm:px-4 flex items-center justify-between z-30 flex-shrink-0 bg-[#121212] border-b border-[#202124]">
-        {/* Back / Leave button */}
-        <button
-          onClick={onLeaveRoom}
-          className="w-9 h-9 rounded-full flex items-center justify-center text-[#e8eaed] hover:bg-[#3c4043]/60 active:scale-95 transition-all"
-          title="Leave Room"
-          aria-label="Leave Room"
-        >
-          <ArrowLeft className="w-4 h-4" />
-        </button>
+        {/* Brand / Meeting Badge (Non-destructive, does NOT exit room) */}
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-xl bg-[#8ab4f8]/15 border border-[#8ab4f8]/30 flex items-center justify-center text-[#8ab4f8]">
+            <Video className="w-4 h-4" />
+          </div>
+          <span className="text-xs font-bold text-white hidden sm:inline tracking-tight">
+            afterspot
+          </span>
+        </div>
 
         {/* Center Room Pill */}
         <div className="flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#202124] border border-[#3c4043]/50 text-xs font-medium text-[#e8eaed] shadow-sm max-w-[200px] sm:max-w-xs truncate">
@@ -733,14 +783,16 @@ export default function VideoCallGrid({
         </div>
 
         {/* Action Pills */}
-        <div className="flex items-center gap-1.5 relative">
+        <div className="flex items-center gap-1.5 sm:gap-2 relative">
+          {/* Share Meeting Link Button (Always visible on mobile & desktop) */}
           <button
-            onClick={copyInviteLink}
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#202124] hover:bg-[#3c4043] border border-[#3c4043]/50 text-xs text-[#e8eaed] transition-colors"
-            title="Copy Invite Link"
+            type="button"
+            onClick={handleShareLink}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#8ab4f8]/15 hover:bg-[#8ab4f8]/25 border border-[#8ab4f8]/40 text-xs font-semibold text-[#8ab4f8] transition-all active:scale-95 shadow-sm cursor-pointer"
+            title="Share Room Link to let others join"
           >
-            {copied ? <Check className="w-3.5 h-3.5 text-[#34a853]" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copied ? 'Copied' : 'Share'}</span>
+            {copied ? <Check className="w-3.5 h-3.5 text-[#34a853]" /> : <Share2 className="w-3.5 h-3.5" />}
+            <span>{copied ? 'Link Copied!' : 'Share Link'}</span>
           </button>
 
           {/* Layout Menu Trigger */}

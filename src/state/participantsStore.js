@@ -69,9 +69,16 @@ class ParticipantsStore {
 
     // Auto-binding
     this.subscribe = this.subscribe.bind(this);
+    this.subscribeIds = this.subscribeIds.bind(this);
+    this.subscribeActiveSpeaker = this.subscribeActiveSpeaker.bind(this);
+    this.subscribeParticipant = this.subscribeParticipant.bind(this);
+    this.subscribeAudioLevel = this.subscribeAudioLevel.bind(this);
     this.getSnapshot = this.getSnapshot.bind(this);
     this.getActiveSpeakerId = this.getActiveSpeakerId.bind(this);
     this.getParticipantIds = this.getParticipantIds.bind(this);
+    this.getParticipant = this.getParticipant.bind(this);
+    this.getLocalParticipant = this.getLocalParticipant.bind(this);
+    this.getAudioLevel = this.getAudioLevel.bind(this);
 
     // Initial setup with mediaController & services
     this.initialized = false;
@@ -619,27 +626,36 @@ export const participantsStore = new ParticipantsStore();
 // REACT HOOKS (FINE-GRAINED SELECTORS)
 // ==========================================
 
+const subscribeList = (cb) => participantsStore.subscribe(cb);
+const getListSnapshot = () => participantsStore.getSnapshot();
+
 export function useParticipantsList() {
   return useSyncExternalStore(
-    participantsStore.subscribe,
-    participantsStore.getSnapshot,
-    participantsStore.getSnapshot
+    subscribeList,
+    getListSnapshot,
+    getListSnapshot
   );
 }
+
+const subscribeIds = (cb) => participantsStore.subscribeIds(cb);
+const getIdsSnapshot = () => participantsStore.getParticipantIds();
 
 export function useParticipantIds() {
   return useSyncExternalStore(
-    participantsStore.subscribeIds,
-    participantsStore.getParticipantIds,
-    participantsStore.getParticipantIds
+    subscribeIds,
+    getIdsSnapshot,
+    getIdsSnapshot
   );
 }
 
+const subscribeActiveSpeaker = (cb) => participantsStore.subscribeActiveSpeaker(cb);
+const getActiveSpeaker = () => participantsStore.getActiveSpeakerId();
+
 export function useActiveSpeakerId() {
   return useSyncExternalStore(
-    participantsStore.subscribeActiveSpeaker,
-    participantsStore.getActiveSpeakerId,
-    participantsStore.getActiveSpeakerId
+    subscribeActiveSpeaker,
+    getActiveSpeaker,
+    getActiveSpeaker
   );
 }
 

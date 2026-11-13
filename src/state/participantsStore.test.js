@@ -132,4 +132,22 @@ describe('participantsStore Unit Tests', () => {
 
     participantsStore.reportSpeechActivity('p2', false);
   });
+
+  it('subscription methods are safe when passed detached without this context', () => {
+    participantsStore.reset();
+    const { subscribe, subscribeIds, subscribeActiveSpeaker, getSnapshot, getActiveSpeakerId, getParticipantIds } = participantsStore;
+
+    // Call as detached functions (this === undefined)
+    const unsubSpeaker = subscribeActiveSpeaker(() => {});
+    const unsubIds = subscribeIds(() => {});
+    const unsubGlobal = subscribe(() => {});
+
+    assert.equal(getActiveSpeakerId(), null);
+    assert.ok(Array.isArray(getParticipantIds()));
+    assert.ok(Array.isArray(getSnapshot()));
+
+    unsubSpeaker();
+    unsubIds();
+    unsubGlobal();
+  });
 });

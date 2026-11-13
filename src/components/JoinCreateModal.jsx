@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 import socket from '../services/socket';
 import { getClientId } from '../services/clientId';
-import mediaService from '../services/mediaService';
 import mediaController from '../services/mediaController';
 import peerConnectionService from '../services/peerConnectionService';
 import livekitService from '../services/livekitService';

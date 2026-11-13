@@ -10,7 +10,8 @@ import {
   MessageSquare,
   X,
   Send,
-  ScreenShare
+  ScreenShare,
+  AlertCircle
 } from 'lucide-react';
 import useLocalMedia from '../hooks/useLocalMedia';
 import useWebRTC from '../hooks/useWebRTC';
@@ -63,6 +64,7 @@ export default function VideoCallGrid({
   const {
     peers,
     activeEngine,
+    connectionNotice,
     sendMediaState,
     unlockAudio
   } = useWebRTC({
@@ -284,6 +286,24 @@ export default function VideoCallGrid({
     <div className="flex-1 min-h-0 flex flex-col bg-[#121212] overflow-hidden relative select-none">
       {/* Insecure Context Banner (HTTP on Mobile) */}
       <InsecureContextBanner isSecureContext={isSecureContext} />
+
+      {/* Network Restriction / Connection Trouble Notice */}
+      {remoteParticipants.some(p => p.troubleConnecting) && (
+        <div className="mx-3 sm:mx-4 mt-2 px-3 py-2 bg-amber-950/80 border border-amber-500/50 rounded-lg text-amber-200 text-xs flex items-center gap-2 shadow-lg z-40">
+          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>
+            Having trouble connecting to {remoteParticipants.filter(p => p.troubleConnecting).map(p => p.userName || 'a participant').join(', ')}. This may be a network restriction.
+          </span>
+        </div>
+      )}
+
+      {/* LiveKit SFU Fallback / Relay Notice */}
+      {connectionNotice && !remoteParticipants.some(p => p.troubleConnecting) && (
+        <div className="mx-3 sm:mx-4 mt-2 px-3 py-2 bg-neutral-900/90 border border-neutral-700 rounded-lg text-neutral-300 text-xs flex items-center gap-2 shadow-lg z-40">
+          <AlertCircle className="w-4 h-4 text-neutral-400 shrink-0" />
+          <span>{connectionNotice}</span>
+        </div>
+      )}
 
       {/* Settings Modal */}
       <MeetingSettingsModal

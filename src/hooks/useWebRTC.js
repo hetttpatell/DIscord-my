@@ -19,6 +19,7 @@ export function useWebRTC({
   const [peers, setPeers] = useState({});
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [activeEngine, setActiveEngine] = useState('webrtc'); // 'livekit' | 'webrtc'
+  const [connectionNotice, setConnectionNotice] = useState(null);
   const streamRef = useRef(localStream);
 
   const initialMediaStateRef = useRef(initialMediaState);
@@ -60,12 +61,13 @@ export function useWebRTC({
       sessionId,
       localStream,
       initialMediaState
-    }).then(connectedViaLiveKit => {
+    }).then(result => {
       if (!mounted) return;
 
-      if (connectedViaLiveKit) {
-        console.info('[MediaCoordinator] Using LiveKit SFU Engine');
+      if (result && result.connected) {
+        console.info('[MediaCoordinator] Using LiveKit SFU');
         setActiveEngine('livekit');
+        setConnectionNotice(null);
         const unsub = livekitService.subscribe((event, payload) => {
           if (event === 'peers-updated') {
             setPeers({ ...payload });
@@ -77,13 +79,24 @@ export function useWebRTC({
         };
       } else {
         // 2. Seamless fallback to Native WebRTC Mesh
-        console.info('[MediaCoordinator] Using Native WebRTC Engine (LiveKit credentials optional)');
+        const reason = result?.reason || 'missing credentials';
+        console.warn(`[MediaCoordinator] Using Native WebRTC mesh: reason: ${reason}`);
         setActiveEngine('webrtc');
+
+        if (reason === 'token request failed' || reason === 'connect failed') {
+          console.error(`[MediaCoordinator] LiveKit error: ${result?.error || reason}. Showing fallback notice.`);
+          setConnectionNotice('LiveKit SFU connection failed. Switched to peer-to-peer mesh.');
+        } else {
+          setConnectionNotice(null);
+        }
+
         const unsub = peerConnectionService.subscribe((event, payload) => {
           if (event === 'peers-updated') {
             setPeers({ ...payload });
           } else if (event === 'autoplay-changed') {
             setAutoplayBlocked(Boolean(payload));
+          } else if (event === 'ice-fetch-failed') {
+            setConnectionNotice('Could not reach relay server. Connections may be limited.');
           }
         });
 
@@ -130,6 +143,7 @@ export function useWebRTC({
   return {
     peers,
     activeEngine,
+    connectionNotice,
     autoplayBlocked,
     sendMediaState,
     unlockAudio

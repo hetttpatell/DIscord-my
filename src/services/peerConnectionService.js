@@ -7,25 +7,38 @@
 
 import socket, { getBackendUrl } from './socket';
 
-// Default ICE server fallback in case backend endpoint is unreachable
+// Default ICE server fallback in case backend endpoint is unreachable (STUN only)
 const DEFAULT_ICE_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' },
-    {
-      urls: [
-        'turn:openrelay.metered.ca:80',
-        'turn:openrelay.metered.ca:443',
-        'turn:openrelay.metered.ca:443?transport=tcp'
-      ],
-      username: 'openrelay',
-      credential: 'openrelay'
-    }
+    { urls: 'stun:stun.cloudflare.com:3478' }
   ],
   iceCandidatePoolSize: 10
 };
+
+/**
+ * Log provisioned ICE servers with credentials fully redacted behind ?debug=1
+ */
+function logRedactedIceServers(iceServers) {
+  if (!isDebug()) return;
+  const list = (iceServers || []).map(entry => {
+    const rawUrls = Array.isArray(entry.urls) ? entry.urls : [entry.urls];
+    const schemes = rawUrls.map(u => {
+      const parts = u.split(':');
+      const scheme = parts[0];
+      const hasTcp = u.includes('transport=tcp') ? ' (tcp)' : '';
+      return `${scheme}${hasTcp}`;
+    });
+    return {
+      types: Array.from(new Set(schemes)).join(', '),
+      urls: rawUrls.map(u => u.replace(/:[^:@]+@/, ':***@')),
+      hasCredentials: Boolean(entry.username || entry.credential)
+    };
+  });
+  console.log('[webrtc][trace] Final iceServers provisioned (?debug=1):', list);
+}
 
 // Cap video sender bitrate to ~400kbps to protect client CPU and mesh bandwidth
 async function applyVideoBitrateCap(sender, maxBitrate = 400000) {
@@ -101,25 +114,43 @@ class PeerConnectionService {
   }
 
   /**
-   * Fetch dynamic STUN/TURN ICE configuration from backend
+   * Fetch dynamic STUN/TURN ICE configuration from backend with retry and backoff
    */
   async loadIceConfig(sessionId = 'guest') {
     if (this.iceConfig) return this.iceConfig;
-    try {
-      const url = `${getBackendUrl()}/api/webrtc/ice-servers?sessionId=${encodeURIComponent(sessionId)}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && Array.isArray(data.iceServers) && data.iceServers.length > 0) {
-          this.iceConfig = data;
-          console.debug('[WebRTC] Loaded ICE servers from server:', data.iceServers.length);
-          return this.iceConfig;
+
+    const maxAttempts = 3;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const url = `${getBackendUrl()}/api/webrtc/ice-servers?sessionId=${encodeURIComponent(sessionId)}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+            this.iceConfig = data;
+            this.iceFetchError = null;
+            logRedactedIceServers(data.iceServers);
+            console.debug('[WebRTC] Loaded ICE servers from server:', data.iceServers.length);
+            return this.iceConfig;
+          }
+        }
+        throw new Error(`ICE config endpoint returned HTTP ${res.status}`);
+      } catch (err) {
+        lastError = err;
+        console.warn(`[WebRTC] ICE config fetch attempt ${attempt}/${maxAttempts} failed:`, err.message);
+        if (attempt < maxAttempts) {
+          await new Promise(r => setTimeout(r, attempt * 1000));
         }
       }
-    } catch (e) {
-      console.warn('[WebRTC] Could not fetch ICE config from backend, using default fallback:', e);
     }
+
+    console.error('[WebRTC] All ICE config fetch attempts failed. TURN relay is unavailable. Error:', lastError);
+    this.iceFetchError = lastError;
+    this.notify('ice-fetch-failed', { error: lastError });
     this.iceConfig = DEFAULT_ICE_CONFIG;
+    logRedactedIceServers(DEFAULT_ICE_CONFIG.iceServers);
     return this.iceConfig;
   }
 
@@ -660,6 +691,14 @@ class PeerConnectionService {
       ignoreOffer: false,
       connectionState: 'new',
       iceState: 'new',
+      iceGatheringState: 'new',
+      localCandidateTypes: new Set(),
+      selectedCandidatePairType: 'none',
+      selectedPairDetails: '',
+      hasRestartedIce: false,
+      disconnectedTimeout: null,
+      iceCheckingTimer: null,
+      troubleConnecting: false,
       statsInterval: null
     };
 
@@ -748,9 +787,20 @@ class PeerConnectionService {
       }
     };
 
-    // ICE candidate generation
+    // ICE candidate generation & candidate type logging
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        let cType = event.candidate.type;
+        if (!cType && event.candidate.candidate) {
+          const match = event.candidate.candidate.match(/typ\s+([a-zA-Z0-9]+)/);
+          if (match) cType = match[1];
+        }
+        if (cType) {
+          record.localCandidateTypes.add(cType);
+        }
+        if (isDebug()) {
+          traceLog(`local ICE candidate for peer ${peerId}: type=${cType || 'unknown'}, protocol=${event.candidate.protocol || 'unknown'}, address=${event.candidate.address || 'unknown'}, port=${event.candidate.port || 'unknown'}`);
+        }
         traceLog(`client sent webrtc:signal candidate from: ${socket.id} to: ${peerId}`);
         socket.emit('webrtc:signal', {
           to: peerId,
@@ -760,19 +810,83 @@ class PeerConnectionService {
       }
     };
 
+    // ICE gathering state monitoring
+    pc.onicegatheringstatechange = () => {
+      record.iceGatheringState = pc.iceGatheringState;
+      if (isDebug()) {
+        traceLog(`peer ${peerId} iceGatheringState: ${pc.iceGatheringState}, candidate types: [${Array.from(record.localCandidateTypes).join(', ')}]`);
+      }
+      if (pc.iceGatheringState === 'complete') {
+        if (!record.localCandidateTypes.has('relay')) {
+          console.warn('[webrtc] no relay candidates: TURN is missing or unreachable');
+        }
+      }
+      this.updateStats(peerId);
+      this.notify('peers-updated', this.getAllPeers());
+    };
+
     // ICE Connection state monitoring
     pc.oniceconnectionstatechange = () => {
       record.iceState = pc.iceConnectionState;
-      traceLog(`peer state change (iceConnectionState) for peerId: ${peerId}: ${pc.iceConnectionState}`);
+      if (isDebug()) {
+        traceLog(`peer state change for peerId ${peerId}: iceConnectionState=${pc.iceConnectionState}, iceGatheringState=${pc.iceGatheringState}, connectionState=${pc.connectionState}, candidateTypes=[${Array.from(record.localCandidateTypes).join(', ')}]`);
+      }
 
-      if (pc.iceConnectionState === 'failed') {
-        console.warn(`[WebRTC] ICE failed with ${peerId}, triggering ICE restart...`);
-        try {
-          pc.restartIce();
-        } catch (e) {
-          console.warn('[WebRTC] restartIce error:', e);
+      // Check if connection is in 'checking' or 'failed' for more than 10 seconds
+      if (pc.iceConnectionState === 'checking' || pc.iceConnectionState === 'failed') {
+        if (!record.iceCheckingTimer) {
+          record.iceCheckingTimer = setTimeout(() => {
+            if (record.pc && (record.pc.iceConnectionState === 'checking' || record.pc.iceConnectionState === 'failed')) {
+              record.troubleConnecting = true;
+              this.notify('peers-updated', this.getAllPeers());
+            }
+          }, 10000);
+        }
+      } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        if (record.iceCheckingTimer) {
+          clearTimeout(record.iceCheckingTimer);
+          record.iceCheckingTimer = null;
+        }
+        if (record.troubleConnecting) {
+          record.troubleConnecting = false;
         }
       }
+
+      // Handle iceConnectionState 'failed' by calling pc.restartIce() once per peer
+      if (pc.iceConnectionState === 'failed') {
+        if (!record.hasRestartedIce) {
+          record.hasRestartedIce = true;
+          console.warn(`[WebRTC] ICE failed with ${peerId}, calling pc.restartIce() once...`);
+          try {
+            pc.restartIce();
+          } catch (e) {
+            console.warn('[WebRTC] restartIce error:', e);
+          }
+        }
+      } else if (pc.iceConnectionState === 'disconnected') {
+        // Handle 'disconnected' by waiting 5 seconds before restarting
+        if (!record.disconnectedTimeout && !record.hasRestartedIce) {
+          record.disconnectedTimeout = setTimeout(() => {
+            record.disconnectedTimeout = null;
+            if (record.pc && record.pc.iceConnectionState === 'disconnected' && !record.hasRestartedIce) {
+              record.hasRestartedIce = true;
+              console.warn(`[WebRTC] Peer ${peerId} disconnected for 5s, restarting ICE...`);
+              try {
+                record.pc.restartIce();
+              } catch (e) {
+                console.warn('[WebRTC] restartIce error:', e);
+              }
+            }
+          }, 5000);
+        }
+      } else {
+        if (record.disconnectedTimeout) {
+          clearTimeout(record.disconnectedTimeout);
+          record.disconnectedTimeout = null;
+        }
+      }
+
+      this.updateStats(peerId);
       this.notify('peers-updated', this.getAllPeers());
     };
 
@@ -782,13 +896,21 @@ class PeerConnectionService {
 
     pc.onconnectionstatechange = () => {
       record.connectionState = pc.connectionState;
-      traceLog(`peer state change (connectionState) for peerId: ${peerId}: ${pc.connectionState}`);
+      if (isDebug()) {
+        traceLog(`peer state change (connectionState) for peerId: ${peerId}: ${pc.connectionState}`);
+      }
       if (pc.connectionState === 'failed') {
         console.warn(`[WebRTC] Peer connection failed with ${peerId}`);
-        try {
-          pc.restartIce();
-        } catch (e) {}
+        if (!record.hasRestartedIce) {
+          record.hasRestartedIce = true;
+          try {
+            pc.restartIce();
+          } catch (e) {
+            console.warn('[WebRTC] restartIce error:', e);
+          }
+        }
       }
+      this.updateStats(peerId);
       this.notify('peers-updated', this.getAllPeers());
     };
 
@@ -946,12 +1068,22 @@ class PeerConnectionService {
     if (record.statsInterval) {
       clearInterval(record.statsInterval);
     }
+    if (record.iceCheckingTimer) {
+      clearTimeout(record.iceCheckingTimer);
+      record.iceCheckingTimer = null;
+    }
+    if (record.disconnectedTimeout) {
+      clearTimeout(record.disconnectedTimeout);
+      record.disconnectedTimeout = null;
+    }
     if (record.pc) {
       record.pc.onicecandidate = null;
+      record.pc.onicegatheringstatechange = null;
       record.pc.ontrack = null;
       record.pc.onnegotiationneeded = null;
       record.pc.oniceconnectionstatechange = null;
       record.pc.onconnectionstatechange = null;
+      record.pc.onsignalingstatechange = null;
       try {
         record.pc.close();
       } catch (e) {}
@@ -993,10 +1125,49 @@ class PeerConnectionService {
         isSpeaking: Boolean(media.isSpeaking),
         connectionQuality: media.connectionQuality || 'good',
         iceState: record.iceState,
+        troubleConnecting: Boolean(record.troubleConnecting),
         stream
       };
     }
     return peers;
+  }
+
+  /**
+   * Extract active candidate pair from pc.getStats()
+   */
+  async updateStats(peerId) {
+    const record = this.peerConnections.get(peerId);
+    if (!record || !record.pc || typeof record.pc.getStats !== 'function') return;
+    try {
+      const stats = await record.pc.getStats();
+      let activePair = null;
+      stats.forEach(report => {
+        if (report.type === 'transport' && report.selectedCandidatePairId) {
+          activePair = stats.get(report.selectedCandidatePairId);
+        }
+        if (!activePair && report.type === 'candidate-pair' && (report.selected || report.nominated)) {
+          if (report.state === 'succeeded' || !activePair) {
+            activePair = report;
+          }
+        }
+      });
+      if (activePair) {
+        const localCand = stats.get(activePair.localCandidateId);
+        const remoteCand = stats.get(activePair.remoteCandidateId);
+        const localType = localCand?.candidateType || 'unknown';
+        const remoteType = remoteCand?.candidateType || 'unknown';
+        let pairType = 'host';
+        if (localType === 'relay' || remoteType === 'relay') {
+          pairType = 'relay';
+        } else if (localType === 'srflx' || remoteType === 'srflx') {
+          pairType = 'srflx';
+        } else if (localType === 'prflx' || remoteType === 'prflx') {
+          pairType = 'prflx';
+        }
+        record.selectedCandidatePairType = pairType;
+        record.selectedPairDetails = `${localType}->${remoteType}`;
+      }
+    } catch {}
   }
 
   /**
@@ -1024,6 +1195,7 @@ class PeerConnectionService {
     for (const [peerId, record] of this.peerConnections.entries()) {
       const pc = record.pc;
       if (!pc) continue;
+      this.updateStats(peerId);
       const senders = (typeof pc.getSenders === 'function' ? pc.getSenders() : []).map(s => ({
         kind: s.track ? s.track.kind : (s.kind || 'unknown'),
         trackId: s.track?.id || null,
@@ -1042,6 +1214,11 @@ class PeerConnectionService {
         peerId,
         connectionState: pc.connectionState,
         iceConnectionState: pc.iceConnectionState,
+        iceGatheringState: pc.iceGatheringState || record.iceGatheringState || 'unknown',
+        candidateTypes: Array.from(record.localCandidateTypes || []),
+        selectedCandidatePairType: record.selectedCandidatePairType || 'none',
+        selectedPairDetails: record.selectedPairDetails || '',
+        troubleConnecting: Boolean(record.troubleConnecting),
         signalingState: pc.signalingState,
         polite: record.polite,
         senders,
@@ -1051,6 +1228,7 @@ class PeerConnectionService {
     return {
       engine: 'mesh',
       connections,
+      iceFetchError: this.iceFetchError ? this.iceFetchError.message : null,
       diagnostics: this.diagnosticsInfo
     };
   }

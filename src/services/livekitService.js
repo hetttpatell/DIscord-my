@@ -62,20 +62,30 @@ class LiveKitService {
    */
   async fetchToken(roomId, userName, sessionId) {
     try {
-      const res = await fetch(`${getBackendUrl()}/api/livekit/token`, {
+      const url = `${getBackendUrl()}/api/livekit/token`;
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId, userName, sessionId })
       });
 
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        console.error('[LiveKitService] /api/livekit/token returned HTML. Backend URL may be pointing to static frontend origin (Vercel). Verify VITE_BACKEND_URL.');
+        return { enabled: false, reason: 'token request failed', error: 'HTML returned from token endpoint' };
+      }
+
       if (res.ok) {
         const data = await res.json();
         return data;
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        return { enabled: false, reason: 'token request failed', error: errData.error || `HTTP ${res.status}` };
       }
     } catch (err) {
       console.warn('[LiveKitService] Token fetch failed:', err.message);
+      return { enabled: false, reason: 'token request failed', error: err.message };
     }
-    return { enabled: false, reason: 'FETCH_FAILED' };
   }
 
   /**
@@ -84,9 +94,16 @@ class LiveKitService {
   async connectRoom({ roomId, userName, sessionId, localStream, initialMediaState = {} }) {
     // 1. Request token
     const auth = await this.fetchToken(roomId, userName, sessionId);
-    if (!auth || !auth.enabled || !auth.token || !auth.url) {
+    if (!auth || !auth.enabled) {
       this.isEnabled = false;
-      return false; // Triggers fallback to native WebRTC
+      const reason = auth?.reason === 'missing credentials' ? 'missing credentials' : 'token request failed';
+      return { connected: false, reason, error: auth?.error };
+    }
+
+    const livekitUrl = auth.url || (typeof import.meta !== 'undefined' && import.meta.env?.VITE_LIVEKIT_URL);
+    if (!livekitUrl || !auth.token) {
+      this.isEnabled = false;
+      return { connected: false, reason: 'token request failed', error: 'No LiveKit URL or token returned' };
     }
 
     this.isEnabled = true;
@@ -103,7 +120,7 @@ class LiveKitService {
     this.bindRoomEvents();
 
     try {
-      await this.room.connect(auth.url, auth.token);
+      await this.room.connect(livekitUrl, auth.token);
       this.isConnected = true;
       console.debug('[LiveKitService] Successfully connected to LiveKit room:', this.room.name);
 
@@ -113,12 +130,12 @@ class LiveKitService {
       }
 
       this.updateParticipants();
-      return true;
+      return { connected: true };
     } catch (err) {
       console.error('[LiveKitService] Connection failed:', err);
       this.isEnabled = false;
       this.isConnected = false;
-      return false;
+      return { connected: false, reason: 'connect failed', error: err.message };
     }
   }
 

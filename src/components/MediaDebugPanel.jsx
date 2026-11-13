@@ -200,10 +200,33 @@ export default function MediaDebugPanel() {
               ) : (
                 <div>
                   <div>Peers: {debugState.webrtcInfo.connections?.length || 0}</div>
+                  {debugState.webrtcInfo.iceFetchError && (
+                    <div className="p-1 my-1 bg-red-950/60 border border-red-500/40 rounded text-red-300 text-[10px]">
+                      ⚠️ ICE Fetch Failed: {debugState.webrtcInfo.iceFetchError} (Using STUN fallback)
+                    </div>
+                  )}
                   {debugState.webrtcInfo.connections?.map(c => (
-                    <div key={c.peerId} className="p-1 my-1 bg-white/5 rounded">
-                      <div className="text-white text-[10px] truncate">{c.peerId}</div>
-                      <div>conn: {c.connectionState} | ice: {c.iceConnectionState}</div>
+                    <div key={c.peerId} className="p-1 my-1 bg-white/5 rounded border border-white/10">
+                      <div className="text-white text-[10px] truncate font-bold">{c.peerId}</div>
+                      <div>conn: <span className="text-white">{c.connectionState}</span> | ice: <span className="text-white">{c.iceConnectionState}</span> (gather: {c.iceGatheringState})</div>
+                      <div>
+                        selected pair: <span className={`px-1 py-0.5 rounded font-bold uppercase text-[9px] ${
+                          c.selectedCandidatePairType === 'relay'
+                            ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                            : c.selectedCandidatePairType === 'srflx'
+                              ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                              : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                        }`}>{c.selectedCandidatePairType || 'none'}</span>
+                        {c.selectedPairDetails && <span className="text-[9px] text-gray-400 ml-1">({c.selectedPairDetails})</span>}
+                      </div>
+                      <div className="text-[10px] text-gray-300">
+                        candidates: <span className={c.candidateTypes?.includes('relay') ? 'text-green-300' : 'text-yellow-400'}>
+                          {c.candidateTypes?.length ? c.candidateTypes.join(', ') : 'gathering...'}
+                        </span>
+                      </div>
+                      {c.troubleConnecting && (
+                        <div className="text-[10px] text-red-400 font-bold">⚠️ Connection trouble (&gt;10s in checking/failed)</div>
+                      )}
                       <div>signaling: {c.signalingState} | polite: {String(c.polite)}</div>
                       <div className="text-[9px] text-gray-300 mt-1">
                         <div className="font-semibold text-gray-400">Transceivers ({c.transceivers?.length || 0}):</div>

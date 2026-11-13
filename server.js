@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { AccessToken } from 'livekit-server-sdk';
-import { getIceServerConfig } from './server/iceConfig.js';
+import { getIceServerConfig, getTurnProviderStatus } from './server/iceConfig.js';
 import { roomStore, hashPassword, verifyPassword } from './server/roomStore.js';
 import { advanceQueue } from './server/queue.js';
 
@@ -18,12 +18,18 @@ const httpServer = createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
+    origin: (origin, callback) => callback(null, true),
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
-app.use(cors());
+app.use(cors({
+  origin: (origin, callback) => callback(null, true),
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
 app.use(express.json());
 
 // In-memory store for rooms
@@ -127,7 +133,7 @@ app.post('/api/livekit/token', async (req, res) => {
   if (!apiKey || !apiSecret || !livekitUrl) {
     return res.json({
       enabled: false,
-      reason: 'LIVEKIT_CREDENTIALS_NOT_SET',
+      reason: 'missing credentials',
       message: 'LiveKit server credentials not configured in .env. Falling back to native WebRTC engine.'
     });
   }
@@ -1257,11 +1263,14 @@ if (isNaN(PORT) || PORT <= 0 || PORT > 65535) {
 httpServer.listen(PORT, () => {
   console.log(`afterspot server listening on http://localhost:${PORT}`);
   const hasLiveKit = Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
-  const hasMetered = Boolean(process.env.METERED_API_KEY);
-  const hasTurn = Boolean(process.env.TURN_URLS || process.env.TURN_URL);
+  const turnStatus = getTurnProviderStatus();
   const hasYouTube = Boolean(process.env.YOUTUBE_API_KEY);
 
   console.log(`[Services] LiveKit SFU: ${hasLiveKit ? 'Configured (Active)' : 'Not set (Native WebRTC Mesh active)'}`);
-  console.log(`[Services] WebRTC Relays: ${hasMetered ? 'Metered.ca Active' : hasTurn ? 'Custom TURN Active' : 'Default OpenRelay Fallback'}`);
+  if (turnStatus.configured) {
+    console.log(`TURN: configured (provider ${turnStatus.provider})`);
+  } else {
+    console.log('TURN: NOT configured, calls across NAT will fail');
+  }
   console.log(`[Services] YouTube API: ${hasYouTube ? 'Configured' : 'Zero-Key oEmbed fallback'}`);
 });

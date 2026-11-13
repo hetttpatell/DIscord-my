@@ -10,19 +10,6 @@ const DEFAULT_STUN_SERVERS = [
   'stun:stun.cloudflare.com:3478'
 ];
 
-// Fallback OpenRelay servers (UDP + TCP 80/443)
-const FALLBACK_TURN_SERVERS = [
-  {
-    urls: [
-      'turn:openrelay.metered.ca:80',
-      'turn:openrelay.metered.ca:443',
-      'turn:openrelay.metered.ca:443?transport=tcp'
-    ],
-    username: 'openrelay',
-    credential: 'openrelay'
-  }
-];
-
 // Cache for Metered dynamic API credentials (valid for 1 hour)
 let meteredCache = {
   expiresAt: 0,
@@ -70,6 +57,52 @@ function generateCoturnCredentials(secret, userSessionId = 'guest', durationSeco
 }
 
 /**
+ * Helper to ensure TURN config includes both UDP and TCP/443 options (including turns:)
+ * for traversal across restrictive firewalls and corporate NATs.
+ */
+export function expandTurnUrls(urls) {
+  if (!urls || urls.length === 0) return [];
+  const result = new Set();
+  const hosts = new Set();
+
+  for (const rawUrl of urls) {
+    if (!rawUrl) continue;
+    result.add(rawUrl);
+    // Parse host e.g. turn:turn.example.com:3478?transport=udp
+    const match = rawUrl.match(/^(?:turns?):([^:?]+)(?::(\d+))?/i);
+    if (match) {
+      hosts.add(match[1]);
+    }
+  }
+
+  // Ensure TCP 443 and turns: are included so calls work on restrictive networks
+  for (const host of hosts) {
+    result.add(`turn:${host}:3478?transport=udp`);
+    result.add(`turn:${host}:3478?transport=tcp`);
+    result.add(`turn:${host}:443?transport=tcp`);
+    result.add(`turns:${host}:443?transport=tcp`);
+    result.add(`turns:${host}:5349?transport=tcp`);
+  }
+
+  return Array.from(result);
+}
+
+/**
+ * Check TURN configuration status without exposing credentials
+ */
+export function getTurnProviderStatus() {
+  if (process.env.METERED_API_KEY) {
+    return { configured: true, provider: 'Metered.ca' };
+  }
+  const turnUrls = process.env.TURN_URLS || process.env.TURN_URL;
+  if (turnUrls && (process.env.TURN_SECRET || (process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL))) {
+    const provider = process.env.TURN_SECRET ? 'Custom Coturn HMAC' : 'Custom TURN';
+    return { configured: true, provider };
+  }
+  return { configured: false, provider: null };
+}
+
+/**
  * Returns complete RTCIceServer configuration
  */
 export async function getIceServerConfig(sessionId) {
@@ -99,7 +132,7 @@ export async function getIceServerConfig(sessionId) {
   // 2. Check if custom TURN server credentials are provided in .env
   const turnUrls = process.env.TURN_URLS || process.env.TURN_URL;
   if (turnUrls) {
-    const urls = turnUrls.split(',').map(u => u.trim()).filter(Boolean);
+    const parsedUrls = turnUrls.split(',').map(u => u.trim()).filter(Boolean);
     let username = process.env.TURN_USERNAME;
     let credential = process.env.TURN_CREDENTIAL;
 
@@ -110,7 +143,8 @@ export async function getIceServerConfig(sessionId) {
       credential = generated.credential;
     }
 
-    if (urls.length > 0 && username && credential) {
+    if (parsedUrls.length > 0 && username && credential) {
+      const urls = expandTurnUrls(parsedUrls);
       iceServers.push({
         urls,
         username,
@@ -123,8 +157,8 @@ export async function getIceServerConfig(sessionId) {
     }
   }
 
-  // 3. Fallback to OpenRelay TURN servers
-  iceServers.push(...FALLBACK_TURN_SERVERS);
+  // 3. No TURN provider configured
+  console.warn('[WebRTC] Warning: No TURN server configured. Calls across symmetric NAT or restrictive networks will fail.');
 
   return {
     iceServers,

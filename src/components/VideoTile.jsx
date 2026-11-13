@@ -18,15 +18,18 @@ export default function VideoTile({
 }) {
   const videoRef = useRef(null);
 
-  // Check if live video track is present
+  // Derive mic and camera indicators from real stream when available; fall back to media-state only when no track exists yet
+  const audioTracks = stream ? stream.getAudioTracks() : [];
+  const primaryAudioTrack = audioTracks[0] || null;
+  const effectiveIsMuted = primaryAudioTrack
+    ? !(primaryAudioTrack.readyState === 'live' && primaryAudioTrack.enabled)
+    : isMuted;
+
   const videoTracks = stream ? stream.getVideoTracks() : [];
   const primaryVideoTrack = videoTracks[0] || null;
-  const hasLiveVideoTrack = Boolean(
-    stream &&
-    primaryVideoTrack &&
-    primaryVideoTrack.readyState === 'live' &&
-    !isCameraOff
-  );
+  const hasLiveVideoTrack = primaryVideoTrack
+    ? (primaryVideoTrack.readyState === 'live' && !primaryVideoTrack.muted && primaryVideoTrack.enabled)
+    : !isCameraOff;
 
   // If the video track exists but the tile still shows the avatar, log the reason
   useEffect(() => {
@@ -91,7 +94,7 @@ export default function VideoTile({
             className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center text-xl sm:text-2xl font-bold text-white shadow-xl mb-2 ring-2 transition-transform ${
               isSpeaking
                 ? 'ring-[#34a853] scale-105'
-                : isMuted
+                : effectiveIsMuted
                 ? 'ring-[#ea4335]'
                 : 'ring-white/20'
             }`}
@@ -157,8 +160,8 @@ export default function VideoTile({
           )}
 
           {/* Mic Status Badge */}
-          <div className={`p-1.5 rounded-lg backdrop-blur-md ${isMuted ? 'bg-[#ea4335]/90 text-white' : 'bg-black/75 text-[#34a853]'}`}>
-            {isMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+          <div className={`p-1.5 rounded-lg backdrop-blur-md ${effectiveIsMuted ? 'bg-[#ea4335]/90 text-white' : 'bg-black/75 text-[#34a853]'}`}>
+            {effectiveIsMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
           </div>
         </div>
       </div>

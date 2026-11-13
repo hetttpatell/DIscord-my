@@ -64,7 +64,6 @@ export default function VideoCallGrid({
   const {
     peers,
     activeEngine,
-    autoplayBlocked,
     sendMediaState,
     unlockAudio
   } = useWebRTC({
@@ -87,7 +86,7 @@ export default function VideoCallGrid({
     startAudio(shouldStartMuted).then(track => {
       if (!mounted) return;
       if (track) {
-        sendMediaState({ isMuted: shouldStartMuted, isCameraOff: true, isScreenSharing: false });
+        sendMediaState({ isMuted: shouldStartMuted, isCameraOff: !isCameraOn, isScreenSharing: false });
       }
     });
 
@@ -95,7 +94,7 @@ export default function VideoCallGrid({
       mounted = false;
       stopAll();
     };
-  }, [startAudio, stopAll, sendMediaState]);
+  }, [startAudio, stopAll, sendMediaState, isCameraOn, room?.isPlaying, room?.currentTrack]);
 
   // Sync in-call chat with room socket
   useEffect(() => {
@@ -233,7 +232,7 @@ export default function VideoCallGrid({
   const peerList = Object.values(peers);
 
   const memberPeers = (members || [])
-    .filter(m => m.id !== currentUserId && (!currentUser?.sessionId || m.sessionId !== currentUser.sessionId))
+    .filter(m => m.id !== currentUserId)
     .map(m => {
       const activePeer = peers[m.id];
       return activePeer || {
@@ -250,7 +249,11 @@ export default function VideoCallGrid({
 
   const remoteMap = new Map();
   memberPeers.forEach(p => remoteMap.set(p.peerId, p));
-  peerList.forEach(p => remoteMap.set(p.peerId, p));
+  peerList.forEach(p => {
+    if (p && p.peerId !== currentUserId) {
+      remoteMap.set(p.peerId, p);
+    }
+  });
   const remoteParticipants = Array.from(remoteMap.values());
   const totalCallCount = remoteParticipants.length + 1;
   const isAlone = remoteParticipants.length === 0;

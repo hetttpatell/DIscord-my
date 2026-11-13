@@ -13,7 +13,15 @@ function RemoteAudioItem({ peer, onAutoplayBlocked }) {
     if (el.srcObject !== peer.stream) {
       el.srcObject = peer.stream;
     }
-    el.muted = Boolean(peer.isMuted);
+
+    // Microphone is on if there is a live audio track with enabled=true; fall back to media-state only when no track exists yet
+    const audioTracks = peer.stream.getAudioTracks();
+    if (audioTracks.length > 0) {
+      const hasLiveAudio = audioTracks.some(t => t.readyState === 'live' && t.enabled);
+      el.muted = !hasLiveAudio;
+    } else {
+      el.muted = Boolean(peer.isMuted);
+    }
 
     const tryPlay = () => {
       const p = el.play();

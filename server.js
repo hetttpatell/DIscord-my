@@ -434,8 +434,10 @@ io.on('connection', (socket) => {
 
     const isHost = room.hostId === stableClientId || room.members.length === 0;
 
-    // Check if this session already exists as a member (reconnecting user)
-    const existingMember = room.members.find(m => m.clientId === stableClientId || m.sessionId === stableClientId);
+    // Check if this session already exists as a member (reconnecting offline user or same socket)
+    const existingMember = room.members.find(m => 
+      m.id === socket.id || (!m.isOnline && (m.clientId === stableClientId || m.sessionId === stableClientId))
+    );
     if (existingMember) {
       existingMember.id = socket.id;
       existingMember.clientId = stableClientId;
@@ -1119,8 +1121,8 @@ io.on('connection', (socket) => {
     socket.to(currentRoomId).emit('webrtc:peer-left', { peerId: socket.id });
 
     // Remove user immediately on explicit leave
-    room.members = room.members.filter(m => m.id !== socket.id && m.sessionId !== currentUser?.sessionId);
-    room.waitingList = room.waitingList.filter(w => w.id !== socket.id && w.sessionId !== currentUser?.sessionId);
+    room.members = room.members.filter(m => m.id !== socket.id);
+    room.waitingList = room.waitingList.filter(w => w.id !== socket.id);
 
     // If host left explicitly, transfer host to next online member or clear
     if (room.hostId === currentUser?.clientId || room.hostSocketId === socket.id) {

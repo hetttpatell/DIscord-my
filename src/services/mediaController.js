@@ -61,24 +61,28 @@ export class MediaController {
 
   getState() {
     return {
-      stream: this.stream,
-      micState: this.micState,
-      cameraState: this.cameraState,
+      stream: this.stream || null,
+      micState: this.micState || 'off',
+      cameraState: this.cameraState || 'off',
       isMicOn: this.micState === 'on',
       isCameraOn: this.cameraState === 'on',
-      facingMode: this.facingMode,
-      isSpeaking: this.isSpeaking,
-      error: this.error,
+      facingMode: this.facingMode || 'user',
+      isSpeaking: Boolean(this.isSpeaking),
+      error: this.error || null,
       isSecureContext: this.isSecureContext,
-      isAudioMutedBySystem: this.isAudioMutedBySystem,
-      isVideoMutedBySystem: this.isVideoMutedBySystem
+      isAudioMutedBySystem: Boolean(this.isAudioMutedBySystem),
+      isVideoMutedBySystem: Boolean(this.isVideoMutedBySystem)
     };
   }
 
   subscribe(listener) {
+    if (typeof listener !== 'function') return () => {};
     this.listeners.add(listener);
+    const state = this.getState();
     try {
-      listener('state-changed', this.getState());
+      // Pass state as both payload and state so subscribers accepting
+      // (event, payload) or (event, payload, state) always receive a valid state object
+      listener('state-changed', state, state);
     } catch (err) {
       console.error('[media] Subscriber error:', err);
     }
@@ -87,9 +91,10 @@ export class MediaController {
 
   notify(event = 'state-changed', payload = {}) {
     const state = this.getState();
+    const effectivePayload = (payload !== undefined && payload !== null) ? payload : state;
     this.listeners.forEach(cb => {
       try {
-        cb(event, payload, state);
+        cb(event, effectivePayload, state);
       } catch (err) {
         console.error('[media] Subscriber error:', err);
       }

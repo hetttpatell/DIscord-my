@@ -59,10 +59,12 @@ export default function JoinCreateModal({
     }
 
     const unsubscribe = mediaController.subscribe((event, payload, state) => {
-      setIsMicReady(state.isMicOn);
-      setIsSpeaking(Boolean(state.isSpeaking));
+      const current = state || payload || mediaController.getState();
+      if (!current) return;
+      setIsMicReady(Boolean(current.isMicOn));
+      setIsSpeaking(Boolean(current.isSpeaking));
       if (event === 'error' && payload?.device === 'audio') {
-        setMicErrorMessage(payload.message);
+        setMicErrorMessage(payload?.message || 'Microphone error');
       }
     });
 
@@ -171,9 +173,9 @@ export default function JoinCreateModal({
     // Pre-request microphone access on this direct user click gesture (keeps stream alive for the call)
     peerConnectionService.unlockAudio();
     livekitService.startAudio();
-    if (!mediaService.isMicOn) {
+    if (mediaController.micState !== 'on') {
       try {
-        await mediaService.acquireAudioTrack();
+        await mediaController.enableMic();
       } catch (err) {
         console.debug('Microphone acquisition error:', err);
       }
@@ -215,9 +217,9 @@ export default function JoinCreateModal({
     // Pre-request microphone access on this direct user click gesture (keeps stream alive for the call)
     peerConnectionService.unlockAudio();
     livekitService.startAudio();
-    if (!mediaService.isMicOn) {
+    if (mediaController.micState !== 'on') {
       try {
-        await mediaService.acquireAudioTrack();
+        await mediaController.enableMic();
       } catch (err) {
         console.debug('Microphone acquisition error:', err);
       }

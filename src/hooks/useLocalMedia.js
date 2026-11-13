@@ -10,9 +10,12 @@ export function useLocalMedia() {
   const [streamVersion, setStreamVersion] = useState(0);
 
   useEffect(() => {
-    const unsubscribe = mediaController.subscribe((_event, _payload, state) => {
-      setMediaState(state);
-      setStreamVersion(v => v + 1);
+    const unsubscribe = mediaController.subscribe((_event, payload, state) => {
+      const current = state || payload || mediaController.getState();
+      if (current) {
+        setMediaState(current);
+        setStreamVersion(v => v + 1);
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -62,18 +65,18 @@ export function useLocalMedia() {
   }, []);
 
   return {
-    stream: mediaState.stream,
+    stream: mediaState?.stream || null,
     streamVersion,
-    micState: mediaState.micState,
-    cameraState: mediaState.cameraState,
-    isMicOn: mediaState.isMicOn,
-    isCameraOn: mediaState.isCameraOn,
-    facingMode: mediaState.facingMode,
-    isSpeaking: mediaState.isSpeaking,
-    error: mediaState.error,
-    isSecureContext: mediaState.isSecureContext,
-    isAudioMutedBySystem: mediaState.isAudioMutedBySystem,
-    isVideoMutedBySystem: mediaState.isVideoMutedBySystem,
+    micState: mediaState?.micState || 'off',
+    cameraState: mediaState?.cameraState || 'off',
+    isMicOn: Boolean(mediaState?.isMicOn),
+    isCameraOn: Boolean(mediaState?.isCameraOn),
+    facingMode: mediaState?.facingMode || 'user',
+    isSpeaking: Boolean(mediaState?.isSpeaking),
+    error: mediaState?.error || null,
+    isSecureContext: Boolean(mediaState?.isSecureContext),
+    isAudioMutedBySystem: Boolean(mediaState?.isAudioMutedBySystem),
+    isVideoMutedBySystem: Boolean(mediaState?.isVideoMutedBySystem),
     toggleMic,
     enableMic,
     disableMic,

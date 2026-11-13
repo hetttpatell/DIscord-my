@@ -53,19 +53,21 @@ export default function MeetingLobby({
     );
 
     const initial = mediaController.getState();
-    setIsMicOn(initial.isMicOn);
-    setIsCameraOn(initial.isCameraOn);
+    setIsMicOn(Boolean(initial?.isMicOn));
+    setIsCameraOn(Boolean(initial?.isCameraOn));
 
     const unsub = mediaController.subscribe((event, payload, state) => {
-      setIsMicOn(state.isMicOn);
-      setIsCameraOn(state.isCameraOn);
-      setIsSpeaking(Boolean(state.isSpeaking));
+      const current = state || payload || mediaController.getState();
+      if (!current) return;
+      setIsMicOn(Boolean(current.isMicOn));
+      setIsCameraOn(Boolean(current.isCameraOn));
+      setIsSpeaking(Boolean(current.isSpeaking));
 
       if (previewVideoRef.current) {
-        if (state.isCameraOn && state.stream) {
-          previewVideoRef.current.srcObject = state.stream;
+        if (current.isCameraOn && current.stream) {
+          previewVideoRef.current.srcObject = current.stream;
           previewVideoRef.current.play().catch(() => {});
-        } else if (!state.isCameraOn) {
+        } else if (!current.isCameraOn) {
           previewVideoRef.current.srcObject = null;
         }
       }

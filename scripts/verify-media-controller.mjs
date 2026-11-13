@@ -172,6 +172,32 @@ assert.strictEqual(controller.cameraState, 'off', 'cameraState reset to off on r
 assert.strictEqual(controller.stream, null, 'localStream cleared on room leave');
 console.log('✓ Invariant 6: Room exit cleanup cleanly stops all tracks');
 
+// --- Test 7: Subscriber Resilience & Signature Invariants ---
+console.log('[Test 7] Verifying subscriber resilience for (event, payload, state)...');
+let received3ArgMicOn = null;
+let received2ArgMicOn = null;
+
+// Test subscriber with 3 parameters (event, payload, state)
+const unsub1 = controller.subscribe((event, payload, state) => {
+  assert.notStrictEqual(state, undefined, '3rd argument state must not be undefined');
+  assert.strictEqual(typeof state.isMicOn, 'boolean', 'state.isMicOn must be boolean');
+  received3ArgMicOn = state.isMicOn;
+});
+
+// Test subscriber with 2 parameters (event, payload)
+const unsub2 = controller.subscribe((event, payload) => {
+  assert.notStrictEqual(payload, undefined, '2nd argument payload must not be undefined');
+  assert.strictEqual(typeof payload.isMicOn, 'boolean', 'payload.isMicOn must be boolean');
+  received2ArgMicOn = payload.isMicOn;
+});
+
+assert.strictEqual(received3ArgMicOn, false, 'Initial mic state isMicOn: false received');
+assert.strictEqual(received2ArgMicOn, false, 'Initial mic state isMicOn: false received');
+
+unsub1();
+unsub2();
+console.log('✓ Invariant 7: Subscriber callback signatures safely receive defined state with isMicOn');
+
 console.log('================================================================');
 console.log('ALL MEDIACONTROLLER INVARIANTS PASSED SUCCESSFULLY (0 ERRORS)');
 console.log('================================================================');

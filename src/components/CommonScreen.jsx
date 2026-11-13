@@ -49,7 +49,7 @@ import {
   CURATED_TRACKS 
 } from '../services/youtube';
 import socket from '../services/socket';
-import mediaService from '../services/mediaService';
+import mediaController from '../services/mediaController';
 
 const QUICK_REACTIONS = ['🔥', '❤️', '🎧', '🕺', '👏', '🚀', '✨', '😂'];
 
@@ -108,15 +108,14 @@ export default function CommonScreen({
   // UI helpers
   const [copiedId, setCopiedId] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [isMicOn, setIsMicOn] = useState(mediaService.isMicOn);
+  const [isMicOn, setIsMicOn] = useState(() => Boolean(mediaController.getState()?.isMicOn));
   const [showLeaveModal, setShowLeaveModal] = useState(false);
   const searchInputRef = useRef(null);
 
   useEffect(() => {
-    return mediaService.subscribe((event, payload, state) => {
-      if (event === 'state-changed') {
-        setIsMicOn(state.isMicOn);
-      }
+    return mediaController.subscribe((_event, payload, state) => {
+      const current = state || payload || mediaController.getState();
+      setIsMicOn(Boolean(current?.isMicOn));
     });
   }, []);
 
@@ -1110,7 +1109,7 @@ export default function CommonScreen({
 
             <div className="flex items-center gap-1 text-[#b5bac1]">
               <button
-                onClick={() => mediaService.toggleMic()}
+                onClick={() => mediaController.toggleMic()}
                 className={`p-1.5 rounded hover:bg-[#35373c] transition-colors ${!isMicOn ? 'text-[#f23f43]' : 'text-[#23a55a] hover:text-[#dbdee1]'}`}
                 title={isMicOn ? 'Mute Mic' : 'Unmute Mic'}
               >

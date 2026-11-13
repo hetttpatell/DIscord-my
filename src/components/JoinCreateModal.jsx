@@ -10,6 +10,7 @@ import {
 import socket from '../services/socket';
 import { getClientId } from '../services/clientId';
 import mediaService from '../services/mediaService';
+import mediaController from '../services/mediaController';
 import peerConnectionService from '../services/peerConnectionService';
 import livekitService from '../services/livekitService';
 import MeetingLobby from './MeetingLobby';
@@ -47,22 +48,20 @@ export default function JoinCreateModal({
 
   // Pre-join Audio & Microphone state
   const [isMicReady, setIsMicReady] = useState(() => 
-    Boolean(mediaService.localStream?.getAudioTracks().some(t => t.readyState === 'live'))
+    Boolean(mediaController.stream?.getAudioTracks().some(t => t.readyState === 'live'))
   );
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [micErrorMessage, setMicErrorMessage] = useState(null);
 
   useEffect(() => {
-    if (mediaService.isMicOn && mediaService.localStream?.getAudioTracks().length > 0) {
+    if (mediaController.micState === 'on' && mediaController.stream?.getAudioTracks().length > 0) {
       setIsMicReady(true);
     }
 
-    const unsubscribe = mediaService.subscribe((event, payload, state) => {
-      if (event === 'state-changed') {
-        setIsMicReady(state.isMicOn);
-      } else if (event === 'speaking') {
-        setIsSpeaking(Boolean(payload.isSpeaking));
-      } else if (event === 'error' && payload?.device === 'audio') {
+    const unsubscribe = mediaController.subscribe((event, payload, state) => {
+      setIsMicReady(state.isMicOn);
+      setIsSpeaking(Boolean(state.isSpeaking));
+      if (event === 'error' && payload?.device === 'audio') {
         setMicErrorMessage(payload.message);
       }
     });
@@ -75,13 +74,13 @@ export default function JoinCreateModal({
   const handleEnableMic = async () => {
     setMicErrorMessage(null);
     try {
-      const track = await mediaService.acquireAudioTrack();
+      const track = await mediaController.enableMic();
       peerConnectionService.unlockAudio();
       livekitService.startAudio();
       if (track) {
         setIsMicReady(true);
-      } else if (mediaService.lastError) {
-        setMicErrorMessage(mediaService.lastError.message);
+      } else if (mediaController.error) {
+        setMicErrorMessage(mediaController.error.message);
       }
     } catch (err) {
       setMicErrorMessage(err.message || 'Could not access microphone.');

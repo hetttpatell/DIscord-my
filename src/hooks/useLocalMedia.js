@@ -1,101 +1,85 @@
 import { useState, useEffect, useCallback } from 'react';
-import mediaService from '../services/mediaService';
+import mediaController from '../services/mediaController';
 
 /**
- * React hook wrapping mediaService for reactive components
+ * React hook wrapping mediaController for reactive components.
+ * Subscribes to the single application-wide mediaController state.
  */
 export function useLocalMedia() {
-  const [stream, setStream] = useState(mediaService.localStream);
+  const [mediaState, setMediaState] = useState(() => mediaController.getState());
   const [streamVersion, setStreamVersion] = useState(0);
-  const [isMicOn, setIsMicOn] = useState(mediaService.isMicOn);
-  const [isCameraOn, setIsCameraOn] = useState(mediaService.isCameraOn);
-  const [facingMode, setFacingMode] = useState(mediaService.facingMode);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [error, setError] = useState(null);
-  const [isSecureContext, setIsSecureContext] = useState(
-    typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false
-  );
-  const [isAudioMutedBySystem, setIsAudioMutedBySystem] = useState(false);
-  const [isVideoMutedBySystem, setIsVideoMutedBySystem] = useState(false);
 
   useEffect(() => {
-    setIsSecureContext(typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false);
-
-    const unsubscribe = mediaService.subscribe((event, payload, state) => {
-      if (event === 'stream-changed' || event === 'track-replaced') {
-        setStream(state.stream ? new MediaStream(state.stream.getTracks()) : null);
-        setStreamVersion(v => v + 1);
-        setIsMicOn(state.isMicOn);
-        setIsCameraOn(state.isCameraOn);
-      } else if (event === 'state-changed') {
-        setIsMicOn(state.isMicOn);
-        setIsCameraOn(state.isCameraOn);
-        setFacingMode(state.facingMode);
-      } else if (event === 'track-muted') {
-        if (payload?.kind === 'audio') setIsAudioMutedBySystem(true);
-        if (payload?.kind === 'video') setIsVideoMutedBySystem(true);
-      } else if (event === 'track-unmuted') {
-        if (payload?.kind === 'audio') setIsAudioMutedBySystem(false);
-        if (payload?.kind === 'video') setIsVideoMutedBySystem(false);
-      } else if (event === 'speaking') {
-        setIsSpeaking(Boolean(payload.isSpeaking));
-      } else if (event === 'error') {
-        setError(payload);
-      }
+    const unsubscribe = mediaController.subscribe((_event, _payload, state) => {
+      setMediaState(state);
+      setStreamVersion(v => v + 1);
     });
-
-    return () => {
-      unsubscribe();
-    };
+    return () => unsubscribe();
   }, []);
 
   const toggleMic = useCallback(async () => {
-    setError(null);
-    return mediaService.toggleMic();
+    return mediaController.toggleMic();
+  }, []);
+
+  const enableMic = useCallback(async () => {
+    return mediaController.enableMic();
+  }, []);
+
+  const disableMic = useCallback(async () => {
+    return mediaController.disableMic();
   }, []);
 
   const toggleCamera = useCallback(async () => {
-    setError(null);
-    return mediaService.toggleCamera();
+    return mediaController.toggleCamera();
+  }, []);
+
+  const enableCamera = useCallback(async () => {
+    return mediaController.enableCamera();
+  }, []);
+
+  const disableCamera = useCallback(async () => {
+    return mediaController.disableCamera();
   }, []);
 
   const switchCamera = useCallback(async () => {
-    setError(null);
-    return mediaService.switchCamera();
+    return mediaController.switchCamera();
   }, []);
 
   const startAudio = useCallback(async (initialMuted = false) => {
-    setError(null);
-    return mediaService.acquireAudioTrack(initialMuted);
+    if (initialMuted) {
+      await mediaController.disableMic();
+      return mediaController.stream?.getAudioTracks().find(t => t.readyState === 'live') || null;
+    }
+    return mediaController.enableMic();
   }, []);
 
   const startVideo = useCallback(async () => {
-    setError(null);
-    return mediaService.acquireVideoTrack();
+    return mediaController.enableCamera();
   }, []);
 
   const stopAll = useCallback(() => {
-    mediaService.stopAll();
-    setStream(null);
-    setStreamVersion(v => v + 1);
-    setIsMicOn(false);
-    setIsCameraOn(false);
-    setIsSpeaking(false);
+    mediaController.cleanupOnLeaveRoom();
   }, []);
 
   return {
-    stream,
+    stream: mediaState.stream,
     streamVersion,
-    isMicOn,
-    isCameraOn,
-    facingMode,
-    isSpeaking,
-    error,
-    isSecureContext,
-    isAudioMutedBySystem,
-    isVideoMutedBySystem,
+    micState: mediaState.micState,
+    cameraState: mediaState.cameraState,
+    isMicOn: mediaState.isMicOn,
+    isCameraOn: mediaState.isCameraOn,
+    facingMode: mediaState.facingMode,
+    isSpeaking: mediaState.isSpeaking,
+    error: mediaState.error,
+    isSecureContext: mediaState.isSecureContext,
+    isAudioMutedBySystem: mediaState.isAudioMutedBySystem,
+    isVideoMutedBySystem: mediaState.isVideoMutedBySystem,
     toggleMic,
+    enableMic,
+    disableMic,
     toggleCamera,
+    enableCamera,
+    disableCamera,
     switchCamera,
     startAudio,
     startVideo,
@@ -104,4 +88,3 @@ export function useLocalMedia() {
 }
 
 export default useLocalMedia;
-

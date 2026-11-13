@@ -21,16 +21,18 @@ export function useWebRTC({
   const [activeEngine, setActiveEngine] = useState('webrtc'); // 'livekit' | 'webrtc'
   const streamRef = useRef(localStream);
 
+  const initialMediaStateRef = useRef(initialMediaState);
+
   useEffect(() => {
     streamRef.current = localStream;
     if (activeEngine === 'livekit') {
       if (livekitService.isConnected) {
-        livekitService.publishLocalStream(localStream, initialMediaState);
+        livekitService.publishLocalStream(localStream, initialMediaStateRef.current);
       }
     } else {
       peerConnectionService.updateLocalStream(localStream);
     }
-  }, [localStream, activeEngine, initialMediaState]);
+  }, [localStream, activeEngine]);
 
   // Handle system re-acquired tracks (mobile app switch / screen lock)
   useEffect(() => {

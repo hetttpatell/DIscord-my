@@ -56,8 +56,7 @@ export default function VideoCallGrid({
     toggleMic,
     toggleCamera,
     switchCamera,
-    startAudio,
-    stopAll
+    startAudio
   } = useLocalMedia();
 
   // 2. WebRTC / LiveKit Unified Real-Time Hook
@@ -79,22 +78,28 @@ export default function VideoCallGrid({
     }
   });
 
-  // Auto-acquire microphone on join (muted by default when a track is playing)
+  // Acquire microphone on join if not already acquired from lobby
   useEffect(() => {
     let mounted = true;
+    const hasLiveAudio = Boolean(localStream?.getAudioTracks().some(t => t.readyState === 'live'));
     const shouldStartMuted = Boolean(room?.isPlaying && room?.currentTrack);
-    startAudio(shouldStartMuted).then(track => {
-      if (!mounted) return;
-      if (track) {
-        sendMediaState({ isMuted: shouldStartMuted, isCameraOff: !isCameraOn, isScreenSharing: false });
-      }
-    });
 
+    if (!hasLiveAudio) {
+      startAudio(shouldStartMuted).then(track => {
+        if (!mounted) return;
+        if (track) {
+          sendMediaState({ isMuted: shouldStartMuted, isCameraOff: !isCameraOn, isScreenSharing: false });
+        }
+      });
+    } else {
+      sendMediaState({ isMuted: !isMicOn, isCameraOff: !isCameraOn, isScreenSharing: false });
+    }
+
+    // Policy: Never stop tracks on unmount / StrictMode remount. Cleanup happens only on leaving room.
     return () => {
       mounted = false;
-      stopAll();
     };
-  }, [startAudio, stopAll, sendMediaState, isCameraOn, room?.isPlaying, room?.currentTrack]);
+  }, []); // Run once on room entry
 
   // Sync in-call chat with room socket
   useEffect(() => {
@@ -145,8 +150,15 @@ export default function VideoCallGrid({
 
   // Flip front/back camera on mobile
   const handleFlipCamera = useCallback(async () => {
-    await switchCamera();
-  }, [switchCamera]);
+    const track = await switchCamera();
+    if (track) {
+      sendMediaState({
+        isMuted: !isMicOn,
+        isCameraOff: false,
+        isScreenSharing
+      });
+    }
+  }, [switchCamera, isMicOn, isScreenSharing, sendMediaState]);
 
   // Toggle Screen Share (Desktop)
   const handleToggleScreenShare = async () => {

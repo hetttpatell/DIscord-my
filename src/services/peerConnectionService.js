@@ -76,6 +76,13 @@ class PeerConnectionService {
     this.remoteAnalysers = new Map(); // peerId -> { analyser, interval }
 
     this.autoplayBlocked = false;
+
+    this.diagnosticsInfo = {
+      lastToggle: null,
+      lastMediaStateSent: null,
+      lastMediaStateReceived: null,
+      negotiationNeededCount: 0
+    };
   }
 
   subscribe(callback) {
@@ -211,23 +218,44 @@ class PeerConnectionService {
     const videoTrack = tracks.find(t => t.kind === 'video' && t.readyState === 'live') || null;
 
     let peerIndex = 0;
-    for (const [_peerId, record] of this.peerConnections.entries()) {
+    const toggleSummary = [];
+
+    for (const [peerId, record] of this.peerConnections.entries()) {
       const pc = record.pc;
       if (!pc || pc.signalingState === 'closed') continue;
 
       const allowVideo = peerIndex < 4;
       peerIndex++;
 
+      // Log transceivers at moment of toggle
+      const transceiversBefore = (typeof pc.getTransceivers === 'function' ? pc.getTransceivers() : []).map(t => ({
+        mid: t.mid,
+        direction: t.direction,
+        currentDirection: t.currentDirection,
+        senderTrackKind: t.sender?.track?.kind || null,
+        senderTrackReadyState: t.sender?.track?.readyState || null
+      }));
+
+      traceLog(`[toggle] Peer ${peerId} transceivers before update:`, transceiversBefore, `signalingState: ${pc.signalingState}`);
+
       // Audio transceiver track replacement
       const audioTransceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
         (t.sender?.track?.kind === 'audio') || (t.receiver?.track?.kind === 'audio')
       ) : null;
 
+      let audioReplaceResolved = null;
       if (audioTransceiver) {
         if (audioTransceiver.sender.track !== audioTrack) {
-          audioTransceiver.sender.replaceTrack(audioTrack).catch(err => {
+          try {
+            await audioTransceiver.sender.replaceTrack(audioTrack);
+            audioReplaceResolved = true;
+            traceLog(`[toggle] Audio replaceTrack resolved for peer ${peerId}`);
+          } catch (err) {
+            audioReplaceResolved = false;
             console.warn('[WebRTC] Audio replaceTrack error:', err);
-          });
+          }
+        } else {
+          audioReplaceResolved = 'noop (same track)';
         }
       }
 
@@ -236,19 +264,43 @@ class PeerConnectionService {
         (t.sender?.track?.kind === 'video') || (t.receiver?.track?.kind === 'video')
       ) : null;
 
+      let videoReplaceResolved = null;
       if (videoTransceiver) {
         const trackToSet = allowVideo ? videoTrack : null;
         if (videoTransceiver.sender.track !== trackToSet) {
-          videoTransceiver.sender.replaceTrack(trackToSet).then(() => {
+          try {
+            await videoTransceiver.sender.replaceTrack(trackToSet);
+            videoReplaceResolved = true;
+            traceLog(`[toggle] Video replaceTrack resolved for peer ${peerId}`);
             if (trackToSet) {
               applyVideoBitrateCap(videoTransceiver.sender, 400000);
             }
-          }).catch(err => {
+          } catch (err) {
+            videoReplaceResolved = false;
             console.warn('[WebRTC] Video replaceTrack error:', err);
-          });
+          }
+        } else {
+          videoReplaceResolved = 'noop (same track)';
         }
       }
+
+      toggleSummary.push({
+        peerId,
+        signalingState: pc.signalingState,
+        transceivers: transceiversBefore,
+        audioReplaceResolved,
+        videoReplaceResolved
+      });
     }
+
+    this.diagnosticsInfo.lastToggle = {
+      timestamp: new Date().toISOString(),
+      audioTrackKind: audioTrack?.kind || null,
+      audioTrackReadyState: audioTrack?.readyState || null,
+      videoTrackKind: videoTrack?.kind || null,
+      videoTrackReadyState: videoTrack?.readyState || null,
+      peers: toggleSummary
+    };
 
     // Broadcast updated media state after local tracks are acquired or replaced
     const audioLive = Boolean(audioTrack && audioTrack.enabled);
@@ -324,6 +376,10 @@ class PeerConnectionService {
    */
   sendMediaState(mediaState) {
     if (!this.isCallActive) return;
+    this.diagnosticsInfo.lastMediaStateSent = {
+      timestamp: new Date().toISOString(),
+      payload: { ...mediaState }
+    };
     traceLog(`client sent webrtc:media-state from: ${socket.id}`, mediaState);
     socket.emit('webrtc:media-state', mediaState);
   }
@@ -508,6 +564,11 @@ class PeerConnectionService {
 
   handleMediaStateUpdated({ peerId, isMuted, isCameraOff, isScreenSharing }) {
     if (!peerId || peerId === socket.id) return;
+    this.diagnosticsInfo.lastMediaStateReceived = {
+      timestamp: new Date().toISOString(),
+      from: peerId,
+      payload: { isMuted, isCameraOff, isScreenSharing }
+    };
     traceLog(`client received webrtc:media-state-updated from: ${peerId}, to: ${socket.id}`, { isMuted, isCameraOff, isScreenSharing });
 
     const current = this.peerMediaStates.get(peerId) || {};
@@ -669,6 +730,7 @@ class PeerConnectionService {
 
     // Perfect Negotiation: negotiationneeded handler
     pc.onnegotiationneeded = async () => {
+      this.diagnosticsInfo.negotiationNeededCount++;
       traceLog(`pc.onnegotiationneeded fired for peerId: ${peerId}, signalingState: ${pc.signalingState}, makingOffer: ${record.makingOffer}`);
       try {
         record.makingOffer = true;
@@ -964,18 +1026,32 @@ class PeerConnectionService {
       if (!pc) continue;
       const senders = (typeof pc.getSenders === 'function' ? pc.getSenders() : []).map(s => ({
         kind: s.track ? s.track.kind : (s.kind || 'unknown'),
-        trackId: s.track?.id || null
+        trackId: s.track?.id || null,
+        readyState: s.track?.readyState || 'none',
+        enabled: s.track?.enabled ?? false
+      }));
+      const transceivers = (typeof pc.getTransceivers === 'function' ? pc.getTransceivers() : []).map(t => ({
+        mid: t.mid,
+        direction: t.direction,
+        currentDirection: t.currentDirection,
+        senderTrackKind: t.sender?.track?.kind || null,
+        senderTrackReadyState: t.sender?.track?.readyState || null,
+        senderTrackEnabled: t.sender?.track?.enabled ?? null
       }));
       connections.push({
         peerId,
         connectionState: pc.connectionState,
         iceConnectionState: pc.iceConnectionState,
-        senders
+        signalingState: pc.signalingState,
+        polite: record.polite,
+        senders,
+        transceivers
       });
     }
     return {
       engine: 'mesh',
-      connections
+      connections,
+      diagnostics: this.diagnosticsInfo
     };
   }
 }

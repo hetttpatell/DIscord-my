@@ -6,6 +6,13 @@
 
 import { Room, RoomEvent, Track } from 'livekit-client';
 import { getBackendUrl } from './socket';
+import { isDebug } from './peerConnectionService';
+
+function traceLog(...args) {
+  if (isDebug()) {
+    console.log('[trace][livekit]', ...args);
+  }
+}
 
 class LiveKitService {
   constructor() {
@@ -14,9 +21,25 @@ class LiveKitService {
     this.isConnected = false;
     this.listeners = new Set();
 
+    this.localStream = null;
     this.remoteStreams = new Map(); // identity -> MediaStream
     this.participantsData = new Map(); // identity -> ParticipantInfo
     this.localTracks = [];
+
+    this.diagnosticsInfo = {
+      lastAction: null
+    };
+  }
+
+  recordDiagnostics(method, trackKind, isMuted, isPublished) {
+    this.diagnosticsInfo.lastAction = {
+      method,
+      trackKind,
+      isMuted,
+      isPublished,
+      timestamp: new Date().toISOString()
+    };
+    traceLog(`Action: ${method}, kind: ${trackKind}, isMuted: ${isMuted}, isPublished: ${isPublished}`);
   }
 
   subscribe(callback) {
@@ -104,6 +127,7 @@ class LiveKitService {
    */
   async publishLocalStream(stream, mediaState = {}) {
     if (!this.room || !this.isConnected || !stream) return;
+    this.localStream = stream;
 
     try {
       const audioTrack = stream.getAudioTracks()[0];
@@ -119,15 +143,18 @@ class LiveKitService {
           if (mediaState.isMuted) {
             localAudio.mute();
           }
+          this.recordDiagnostics('publishTrack', 'audio', Boolean(mediaState.isMuted), true);
         } else if (existingAudioPub.track !== audioTrack) {
           if (typeof existingAudioPub.track?.replaceTrack === 'function') {
             await existingAudioPub.track.replaceTrack(audioTrack);
+            this.recordDiagnostics('replaceTrack', 'audio', Boolean(mediaState.isMuted), true);
           } else {
             await this.room.localParticipant.unpublishTrack(existingAudioPub.track);
             await this.room.localParticipant.publishTrack(audioTrack, {
               name: 'microphone',
               source: Track.Source.Microphone
             });
+            this.recordDiagnostics('republishTrack', 'audio', Boolean(mediaState.isMuted), true);
           }
         }
       }
@@ -143,9 +170,11 @@ class LiveKitService {
             source: Track.Source.Camera,
             simulcast: true
           });
+          this.recordDiagnostics('publishTrack', 'video', false, true);
         } else if (existingVideoPub.track !== videoTrack) {
           if (typeof existingVideoPub.track?.replaceTrack === 'function') {
             await existingVideoPub.track.replaceTrack(videoTrack);
+            this.recordDiagnostics('replaceTrack', 'video', false, true);
           } else {
             await this.room.localParticipant.unpublishTrack(existingVideoPub.track);
             await this.room.localParticipant.publishTrack(videoTrack, {
@@ -153,6 +182,7 @@ class LiveKitService {
               source: Track.Source.Camera,
               simulcast: true
             });
+            this.recordDiagnostics('republishTrack', 'video', false, true);
           }
         }
       }
@@ -173,6 +203,7 @@ class LiveKitService {
       if (existingPub && existingPub.track) {
         if (typeof existingPub.track.replaceTrack === 'function') {
           await existingPub.track.replaceTrack(track);
+          this.recordDiagnostics('replaceTrack', track.kind, false, true);
           return;
         }
         await this.room.localParticipant.unpublishTrack(existingPub.track);
@@ -182,32 +213,89 @@ class LiveKitService {
         source: track.kind === 'video' ? Track.Source.Camera : Track.Source.Microphone,
         ...(track.kind === 'video' ? { simulcast: true } : {})
       });
+      this.recordDiagnostics('publishTrack', track.kind, false, true);
     } catch (err) {
       console.warn('[LiveKitService] republishTrack error:', err);
     }
   }
 
   /**
-   * Mute or unmute microphone
+   * Mute or unmute microphone without uncoordinated getUserMedia calls
    */
   async setMicrophoneMuted(muted) {
     if (!this.room || !this.isConnected) return;
     try {
-      await this.room.localParticipant.setMicrophoneEnabled(!muted);
+      const existingAudioPub = Array.from(this.room.localParticipant.trackPublications.values()).find(
+        p => p.source === Track.Source.Microphone || p.kind === 'audio'
+      );
+      if (existingAudioPub && existingAudioPub.track) {
+        if (muted) {
+          await existingAudioPub.mute();
+          this.recordDiagnostics('mute', 'audio', true, true);
+        } else {
+          await existingAudioPub.unmute();
+          this.recordDiagnostics('unmute', 'audio', false, true);
+        }
+      } else if (!muted) {
+        // If not published yet, publish audioTrack from localStream
+        const audioTrack = this.localStream?.getAudioTracks().find(t => t.readyState === 'live');
+        if (audioTrack) {
+          await this.room.localParticipant.publishTrack(audioTrack, {
+            name: 'microphone',
+            source: Track.Source.Microphone
+          });
+          this.recordDiagnostics('publishTrack', 'audio', false, true);
+        }
+      }
     } catch (err) {
-      console.warn('[LiveKitService] setMicrophoneEnabled error:', err);
+      console.error('[media] setMicrophoneMuted error:', err);
     }
   }
 
   /**
-   * Turn camera on or off
+   * Turn camera on or off by publishing/unpublishing localStream's video track
+   * Never calls internal setCameraEnabled which triggers competing getUserMedia
    */
   async setCameraEnabled(enabled) {
     if (!this.room || !this.isConnected) return;
     try {
-      await this.room.localParticipant.setCameraEnabled(enabled);
+      const existingVideoPub = Array.from(this.room.localParticipant.trackPublications.values()).find(
+        p => p.source === Track.Source.Camera || p.kind === 'video'
+      );
+
+      if (enabled) {
+        const videoTrack = this.localStream?.getVideoTracks().find(t => t.readyState === 'live');
+        if (videoTrack) {
+          if (!existingVideoPub) {
+            await this.room.localParticipant.publishTrack(videoTrack, {
+              name: 'camera',
+              source: Track.Source.Camera,
+              simulcast: true
+            });
+            this.recordDiagnostics('publishTrack', 'video', false, true);
+          } else if (existingVideoPub.track !== videoTrack) {
+            if (typeof existingVideoPub.track?.replaceTrack === 'function') {
+              await existingVideoPub.track.replaceTrack(videoTrack);
+              this.recordDiagnostics('replaceTrack', 'video', false, true);
+            } else {
+              await this.room.localParticipant.unpublishTrack(existingVideoPub.track);
+              await this.room.localParticipant.publishTrack(videoTrack, {
+                name: 'camera',
+                source: Track.Source.Camera,
+                simulcast: true
+              });
+              this.recordDiagnostics('republishTrack', 'video', false, true);
+            }
+          }
+        }
+      } else {
+        if (existingVideoPub && existingVideoPub.track) {
+          await this.room.localParticipant.unpublishTrack(existingVideoPub.track);
+          this.recordDiagnostics('unpublishTrack', 'video', true, false);
+        }
+      }
     } catch (err) {
-      console.warn('[LiveKitService] setCameraEnabled error:', err);
+      console.error('[media] setCameraEnabled error:', err);
     }
   }
 
@@ -352,14 +440,18 @@ class LiveKitService {
       for (const pub of this.room.localParticipant.trackPublications.values()) {
         senders.push({
           kind: pub.kind,
-          trackId: pub.trackSid || pub.track?.sid || pub.track?.id || null
+          source: pub.source,
+          trackId: pub.trackSid || pub.track?.sid || pub.track?.id || null,
+          isMuted: Boolean(pub.isMuted),
+          readyState: pub.track?.mediaStreamTrack?.readyState || 'unknown'
         });
       }
     }
     return {
       engine: 'livekit',
       connectionState: this.room?.state || (this.isConnected ? 'connected' : 'disconnected'),
-      senders
+      senders,
+      diagnostics: this.diagnosticsInfo
     };
   }
 }

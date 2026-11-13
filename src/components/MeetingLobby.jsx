@@ -15,6 +15,7 @@ import {
   Volume2
 } from 'lucide-react';
 import mediaService from '../services/mediaService';
+import mediaController from '../services/mediaController';
 import peerConnectionService from '../services/peerConnectionService';
 import livekitService from '../services/livekitService';
 import InsecureContextBanner from './InsecureContextBanner';
@@ -45,29 +46,32 @@ export default function MeetingLobby({
 
   const previewVideoRef = useRef(null);
 
-  // Initialize and subscribe to mediaService
+  // Initialize and subscribe to mediaController
   useEffect(() => {
     setIsSecureContext(
       typeof window !== 'undefined' ? (Boolean(window.isSecureContext) && typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices)) : false
     );
 
-    const unsub = mediaService.subscribe((event, payload, state) => {
-      if (event === 'state-changed') {
-        setIsMicOn(state.isMicOn);
-        setIsCameraOn(state.isCameraOn);
-      } else if (event === 'speaking') {
-        setIsSpeaking(Boolean(payload.isSpeaking));
-      } else if (event === 'stream-changed') {
-        if (previewVideoRef.current) {
+    const initial = mediaController.getState();
+    setIsMicOn(initial.isMicOn);
+    setIsCameraOn(initial.isCameraOn);
+
+    const unsub = mediaController.subscribe((event, payload, state) => {
+      setIsMicOn(state.isMicOn);
+      setIsCameraOn(state.isCameraOn);
+      setIsSpeaking(Boolean(state.isSpeaking));
+
+      if (previewVideoRef.current) {
+        if (state.isCameraOn && state.stream) {
           previewVideoRef.current.srcObject = state.stream;
-          if (state.isCameraOn) {
-            previewVideoRef.current.play().catch(() => {});
-          }
+          previewVideoRef.current.play().catch(() => {});
+        } else if (!state.isCameraOn) {
+          previewVideoRef.current.srcObject = null;
         }
-      } else if (event === 'error') {
-        if (payload?.type !== 'OVERCONSTRAINED') {
-          setPermissionError(payload);
-        }
+      }
+
+      if (event === 'error' && payload?.type !== 'OVERCONSTRAINED') {
+        setPermissionError(payload);
       }
     });
 
@@ -77,8 +81,8 @@ export default function MeetingLobby({
   // Update video element on camera toggle
   useEffect(() => {
     if (previewVideoRef.current) {
-      if (isCameraOn && mediaService.localStream) {
-        previewVideoRef.current.srcObject = mediaService.localStream;
+      if (isCameraOn && mediaController.stream) {
+        previewVideoRef.current.srcObject = mediaController.stream;
         previewVideoRef.current.play().catch(() => {});
       } else {
         previewVideoRef.current.srcObject = null;
@@ -87,19 +91,18 @@ export default function MeetingLobby({
   }, [isCameraOn]);
 
   const handleToggleMic = async () => {
-    mediaService.resetReacquireGuard();
+    mediaController.resetReacquireGuard();
     setPermissionError(null);
     setLastFailedAction('mic');
     try {
-      const track = await mediaService.toggleMic();
+      const track = await mediaController.toggleMic();
       if (track) {
-        setIsMicOn(track.enabled);
         setLastFailedAction(null);
-      } else if (mediaService.lastError && mediaService.lastError.type !== 'OVERCONSTRAINED') {
-        if (mediaService.lastError.name === 'InsecureContextError') {
+      } else if (mediaController.error && mediaController.error.type !== 'OVERCONSTRAINED') {
+        if (mediaController.error.name === 'InsecureContextError') {
           setShowInsecureBanner(true);
         } else {
-          setPermissionError(mediaService.lastError);
+          setPermissionError(mediaController.error);
         }
       }
     } catch (e) {
@@ -117,21 +120,19 @@ export default function MeetingLobby({
   };
 
   const handleToggleCamera = async () => {
-    mediaService.resetReacquireGuard();
+    mediaController.resetReacquireGuard();
     setPermissionError(null);
     setLastFailedAction('camera');
     try {
-      const track = await mediaService.toggleCamera();
+      const track = await mediaController.toggleCamera();
       if (track) {
-        setIsCameraOn(true);
         setLastFailedAction(null);
       } else {
-        setIsCameraOn(false);
-        if (mediaService.lastError && mediaService.lastError.type !== 'OVERCONSTRAINED') {
-          if (mediaService.lastError.name === 'InsecureContextError') {
+        if (mediaController.error && mediaController.error.type !== 'OVERCONSTRAINED') {
+          if (mediaController.error.name === 'InsecureContextError') {
             setShowInsecureBanner(true);
           } else {
-            setPermissionError(mediaService.lastError);
+            setPermissionError(mediaController.error);
           }
         }
       }
@@ -150,7 +151,7 @@ export default function MeetingLobby({
   };
 
   const handleRetry = () => {
-    mediaService.resetReacquireGuard();
+    mediaController.resetReacquireGuard();
     if (lastFailedAction === 'camera') {
       handleToggleCamera();
     } else {
@@ -161,7 +162,7 @@ export default function MeetingLobby({
   const handleFlipCamera = async () => {
     setPermissionError(null);
     try {
-      await mediaService.switchCamera();
+      await mediaController.switchCamera();
     } catch (e) {
       if (e.name === 'InsecureContextError') {
         setShowInsecureBanner(true);

@@ -5,6 +5,7 @@ import JoinCreateModal from './components/JoinCreateModal';
 import MediaDebugPanel from './components/MediaDebugPanel';
 import socket, { getBackendUrl } from './services/socket';
 import { getClientId } from './services/clientId';
+import mediaController from './services/mediaController';
 import { Radio } from 'lucide-react';
 
 function getSessionId() {
@@ -288,6 +289,7 @@ export default function App() {
   }, []);
 
   const handleLeaveRoom = () => {
+    mediaController.cleanupOnLeaveRoom();
     socket.emit('room:leave');
     localStorage.removeItem('togetherTune_activeSession');
     socket.disconnect();

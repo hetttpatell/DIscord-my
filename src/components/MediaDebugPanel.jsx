@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import mediaService from '../services/mediaService';
+import mediaController from '../services/mediaController';
 import peerConnectionService from '../services/peerConnectionService';
 import livekitService from '../services/livekitService';
 
@@ -12,6 +13,7 @@ export default function MediaDebugPanel() {
     protocol: typeof window !== 'undefined' ? window.location.protocol : '',
     visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'unknown',
     lastError: null,
+    controllerState: mediaController.getState(),
     localTracks: [],
     webrtcInfo: null
   });
@@ -47,7 +49,7 @@ export default function MediaDebugPanel() {
         }
       }
 
-      const tracks = (mediaService.localStream?.getTracks() || []).map(t => {
+      const tracks = (mediaController.stream?.getTracks() || []).map(t => {
         let settings = {};
         try {
           settings = typeof t.getSettings === 'function' ? t.getSettings() : {};
@@ -80,6 +82,7 @@ export default function MediaDebugPanel() {
           protocol: typeof window !== 'undefined' ? window.location.protocol : '',
           visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'unknown',
           lastError: mediaService.lastGetUserMediaError,
+          controllerState: mediaController.getState(),
           localTracks: tracks,
           webrtcInfo
         });
@@ -117,6 +120,15 @@ export default function MediaDebugPanel() {
           <div>isSecureContext: <span className={debugState.isSecureContext ? 'text-green-300' : 'text-red-400 font-bold'}>{String(debugState.isSecureContext)}</span></div>
           <div>protocol: <span className="text-white">{debugState.protocol}</span></div>
           <div>visibilityState: <span className="text-white">{debugState.visibilityState}</span></div>
+        </div>
+
+        {/* MediaController Explicit States */}
+        <div>
+          <div className="text-gray-400 uppercase text-[9px] font-bold">MediaController State</div>
+          <div>micState: <span className="text-yellow-300 font-bold">{debugState.controllerState?.micState}</span></div>
+          <div>cameraState: <span className="text-yellow-300 font-bold">{debugState.controllerState?.cameraState}</span></div>
+          <div>facingMode: <span className="text-white">{debugState.controllerState?.facingMode}</span></div>
+          <div>isSpeaking: <span className={debugState.controllerState?.isSpeaking ? 'text-green-300 font-bold' : 'text-gray-400'}>{String(debugState.controllerState?.isSpeaking)}</span></div>
         </div>
 
         {/* Permissions */}
@@ -170,12 +182,20 @@ export default function MediaDebugPanel() {
               {debugState.webrtcInfo.engine === 'livekit' ? (
                 <div>
                   <div>State: {debugState.webrtcInfo.connectionState}</div>
-                  <div>Senders: {debugState.webrtcInfo.senders?.length || 0}</div>
+                  <div>Publications: {debugState.webrtcInfo.senders?.length || 0}</div>
                   {debugState.webrtcInfo.senders?.map((s, idx) => (
                     <div key={idx} className="text-[9px] text-gray-300 pl-2">
-                      • {s.kind} (id: {s.trackId || 'none'})
+                      • {s.kind} ({s.source}): muted={String(s.isMuted)}, readyState={s.readyState}
                     </div>
                   ))}
+                  {debugState.webrtcInfo.diagnostics?.lastAction && (
+                    <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
+                      <div className="text-gray-400">Last Action:</div>
+                      <div>method: {debugState.webrtcInfo.diagnostics.lastAction.method}</div>
+                      <div>kind: {debugState.webrtcInfo.diagnostics.lastAction.trackKind} (published={String(debugState.webrtcInfo.diagnostics.lastAction.isPublished)})</div>
+                      <div className="text-gray-400">{debugState.webrtcInfo.diagnostics.lastAction.timestamp}</div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div>
@@ -184,11 +204,40 @@ export default function MediaDebugPanel() {
                     <div key={c.peerId} className="p-1 my-1 bg-white/5 rounded">
                       <div className="text-white text-[10px] truncate">{c.peerId}</div>
                       <div>conn: {c.connectionState} | ice: {c.iceConnectionState}</div>
-                      <div className="text-[9px] text-gray-300">
-                        senders: {c.senders?.map(s => `${s.kind}:${s.trackId ? s.trackId.slice(0, 6) : 'none'}`).join(', ') || 'none'}
+                      <div>signaling: {c.signalingState} | polite: {String(c.polite)}</div>
+                      <div className="text-[9px] text-gray-300 mt-1">
+                        <div className="font-semibold text-gray-400">Transceivers ({c.transceivers?.length || 0}):</div>
+                        {c.transceivers?.map((t, idx) => (
+                          <div key={idx} className="pl-1">
+                            mid={t.mid ?? 'null'}: {t.direction} (curr: {t.currentDirection || 'none'}) | sender: {t.senderTrackKind || 'none'}[{t.senderTrackReadyState || 'none'}] en={String(t.senderTrackEnabled)}
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ))}
+                  {debugState.webrtcInfo.diagnostics?.lastToggle && (
+                    <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
+                      <div className="text-gray-400">Last Mesh Toggle:</div>
+                      <div>audio: {debugState.webrtcInfo.diagnostics.lastToggle.audioTrackKind || 'none'} [{debugState.webrtcInfo.diagnostics.lastToggle.audioTrackReadyState || 'none'}]</div>
+                      <div>video: {debugState.webrtcInfo.diagnostics.lastToggle.videoTrackKind || 'none'} [{debugState.webrtcInfo.diagnostics.lastToggle.videoTrackReadyState || 'none'}]</div>
+                      <div>peers: {debugState.webrtcInfo.diagnostics.lastToggle.peers?.length || 0}</div>
+                    </div>
+                  )}
+                  {debugState.webrtcInfo.diagnostics?.lastMediaStateSent && (
+                    <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
+                      <div className="text-gray-400">Last webrtc:media-state Sent:</div>
+                      <div>{JSON.stringify(debugState.webrtcInfo.diagnostics.lastMediaStateSent.payload)}</div>
+                      <div className="text-gray-500 text-[9px]">{debugState.webrtcInfo.diagnostics.lastMediaStateSent.timestamp}</div>
+                    </div>
+                  )}
+                  {debugState.webrtcInfo.diagnostics?.lastMediaStateReceived && (
+                    <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
+                      <div className="text-gray-400">Last webrtc:media-state Received:</div>
+                      <div>from: {debugState.webrtcInfo.diagnostics.lastMediaStateReceived.from}</div>
+                      <div>{JSON.stringify(debugState.webrtcInfo.diagnostics.lastMediaStateReceived.payload)}</div>
+                      <div className="text-gray-500 text-[9px]">{debugState.webrtcInfo.diagnostics.lastMediaStateReceived.timestamp}</div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -200,4 +249,3 @@ export default function MediaDebugPanel() {
     </div>
   );
 }
-

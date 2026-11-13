@@ -72,6 +72,22 @@ export default function JoinCreateModal({
     };
   }, []);
 
+  const handleEnableMic = async () => {
+    setMicErrorMessage(null);
+    peerConnectionService.unlockAudio();
+    livekitService.startAudio();
+    try {
+      const track = await mediaService.acquireAudioTrack();
+      if (track) {
+        setIsMicReady(true);
+      } else if (mediaService.lastError) {
+        setMicErrorMessage(mediaService.lastError.message);
+      }
+    } catch (err) {
+      setMicErrorMessage(err.message || 'Could not access microphone.');
+    }
+  };
+
   const handleLobbyJoin = ({ roomId, userName, password }) => {
     setIsLoading(true);
     setErrorMessage(null);

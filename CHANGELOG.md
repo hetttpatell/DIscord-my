@@ -73,6 +73,20 @@ All notable improvements and architectural hardening applied to **afterspot** (T
   - Hashed room passwords using `scrypt` from `node:crypto` and verified with constant-time `crypto.timingSafeEqual`.
   - Updated client `App.jsx` and `JoinCreateModal.jsx` to store active session credentials and auto-rejoin/resume rooms seamlessly upon socket reconnection, surviving server restarts mid-song.
 
+### Audit & Hardening Post-Pass
+- **Files Modified**: `src/components/JoinCreateModal.jsx`, `src/components/InsecureContextBanner.jsx`, `src/components/YouTubePlayer.jsx`, `src/components/VideoCallGrid.jsx`, `src/components/RemoteAudioLayer.jsx`, `src/services/clientId.js` (New), `scripts/verify-queue.mjs` (New)
+- **Changes**:
+  - Defined missing `handleEnableMic` in `JoinCreateModal.jsx` to eliminate `Uncaught ReferenceError: handleEnableMic is not defined` during audio permission prompts.
+  - Hardened YouTube volume ducking to trigger only on remote participant speech (`remoteIsSpeaking`), never on local mic input.
+  - Restricted volume ducking on iOS devices where `setVolume` has no effect.
+  - Removed deprecated `setPlaybackQuality('medium')`.
+  - Adjusted mini-dock styling to be at least 200px high on desktop (~356px wide at 16:9) and max viewport width minus 2rem on mobile.
+  - Generated and stored persistent `clientId` in `localStorage` to key `room.hostId` across restarts.
+  - Replaced stored raw room password with server-issued random `resumeToken`s (SHA-256 hashed on server).
+  - Updated tunnel command in `InsecureContextBanner.jsx` to `cloudflared tunnel --url https://localhost:5173 --no-tls-verify`.
+  - Verified LiveKit audio uniqueness in `RemoteAudioLayer.jsx` preventing duplicate `<audio>` elements.
+  - Created automated concurrency verification test `scripts/verify-queue.mjs` (4 duplicate track-ends simulated; asserted exactly 1 advance accepted).
+
 ---
 
 ## Manual QA Verification Checklist

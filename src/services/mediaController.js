@@ -45,6 +45,18 @@ export class MediaController {
     this.lastReacquireAttemptAt = 0;
     this.consecutiveReacquireFailures = 0;
 
+    // Restore saved devices
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const savedMic = localStorage.getItem('tt_preferred_mic');
+        if (savedMic) mediaService.selectedMicId = savedMic;
+        const savedCam = localStorage.getItem('tt_preferred_camera');
+        if (savedCam) mediaService.selectedCameraId = savedCam;
+        const savedSpk = localStorage.getItem('tt_preferred_speaker');
+        if (savedSpk) mediaService.selectedSpeakerId = savedSpk;
+      }
+    } catch {}
+
     // Initialize listeners
     this.initMediaServiceListeners();
     this.setupPermissionChangeListeners();
@@ -71,12 +83,15 @@ export class MediaController {
       error: this.error || null,
       isSecureContext: this.isSecureContext,
       isAudioMutedBySystem: Boolean(this.isAudioMutedBySystem),
-      isVideoMutedBySystem: Boolean(this.isVideoMutedBySystem)
+      isVideoMutedBySystem: Boolean(this.isVideoMutedBySystem),
+      selectedMicId: mediaService.selectedMicId || '',
+      selectedCameraId: mediaService.selectedCameraId || '',
+      selectedSpeakerId: mediaService.selectedSpeakerId || ''
     };
   }
 
   subscribe(listener) {
-    if (typeof listener !== 'function') return () => {};
+    if (typeof listener !== 'function') return () => { };
     this.listeners.add(listener);
     const state = this.getState();
     try {
@@ -274,7 +289,7 @@ export class MediaController {
       // Policy: camera off stops the track so hardware light turns off & OS lock is released
       if (this.stream) {
         this.stream.getVideoTracks().forEach(t => {
-          try { t.stop(); } catch {}
+          try { t.stop(); } catch { }
           this.stream.removeTrack(t);
         });
       }
@@ -310,7 +325,7 @@ export class MediaController {
       // Policy: stop old track before acquiring new one
       if (this.stream) {
         this.stream.getVideoTracks().forEach(t => {
-          try { t.stop(); } catch {}
+          try { t.stop(); } catch { }
           this.stream.removeTrack(t);
         });
       }
@@ -346,6 +361,96 @@ export class MediaController {
     }
 
     return this.stream?.getVideoTracks().find(t => t.readyState === 'live');
+  }
+
+  // ==========================================
+  // DEVICE SELECTION & LIVE HOT-SWAP
+  // ==========================================
+
+  async setAudioInput(deviceId) {
+    mediaService.selectedMicId = deviceId || null;
+    try {
+      if (deviceId) {
+        localStorage.setItem('tt_preferred_mic', deviceId);
+      } else {
+        localStorage.removeItem('tt_preferred_mic');
+      }
+    } catch {}
+
+    // Live hot-swap if mic is active
+    if (this.micState === 'on') {
+      if (this.audioInFlight) {
+        this.pendingAudioIntent = 'on';
+        return;
+      }
+      this.audioInFlight = true;
+      try {
+        if (this.stream) {
+          this.stream.getAudioTracks().forEach(t => {
+            try { t.stop(); } catch {}
+            this.stream.removeTrack(t);
+          });
+        }
+        await mediaService.acquireAudioTrack(false);
+        this.micState = 'on';
+      } catch (err) {
+        console.error('[media] setAudioInput switch error:', err);
+      } finally {
+        this.audioInFlight = false;
+        this.notify('state-changed', this.getState());
+      }
+    } else {
+      this.notify('state-changed', this.getState());
+    }
+  }
+
+  async setVideoInput(deviceId) {
+    mediaService.selectedCameraId = deviceId || null;
+    try {
+      if (deviceId) {
+        localStorage.setItem('tt_preferred_camera', deviceId);
+      } else {
+        localStorage.removeItem('tt_preferred_camera');
+      }
+    } catch {}
+
+    // Live hot-swap if camera is active
+    if (this.cameraState === 'on') {
+      if (this.videoInFlight) {
+        this.pendingVideoIntent = 'on';
+        return;
+      }
+      this.videoInFlight = true;
+      try {
+        if (this.stream) {
+          this.stream.getVideoTracks().forEach(t => {
+            try { t.stop(); } catch {}
+            this.stream.removeTrack(t);
+          });
+        }
+        await mediaService.acquireVideoTrack(this.facingMode);
+        this.cameraState = 'on';
+      } catch (err) {
+        console.error('[media] setVideoInput switch error:', err);
+      } finally {
+        this.videoInFlight = false;
+        this.notify('state-changed', this.getState());
+      }
+    } else {
+      this.notify('state-changed', this.getState());
+    }
+  }
+
+  setAudioOutput(deviceId) {
+    mediaService.setAudioOutput(deviceId);
+    try {
+      if (deviceId) {
+        localStorage.setItem('tt_preferred_speaker', deviceId);
+      } else {
+        localStorage.removeItem('tt_preferred_speaker');
+      }
+    } catch {}
+    this.notify('state-changed', this.getState());
   }
 
   // ==========================================
@@ -465,7 +570,7 @@ export class MediaController {
           this.notify('state-changed', this.getState());
         }
       };
-    } catch {}
+    } catch { }
 
     try {
       const camStatus = await navigator.permissions.query({ name: 'camera' });
@@ -480,7 +585,7 @@ export class MediaController {
           this.notify('state-changed', this.getState());
         }
       };
-    } catch {}
+    } catch { }
   }
 }
 

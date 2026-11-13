@@ -998,6 +998,101 @@ io.on('connection', (socket) => {
     });
   });
 
+  // 15b. Participant & Host Protocol Events (Meet Style)
+  socket.on('participant:hand-raise', ({ roomId, participantId, isRaised, name }) => {
+    const targetRoomId = roomId || currentRoomId;
+    if (!targetRoomId) return;
+    io.to(targetRoomId).emit('participant:hand-raised', {
+      participantId: participantId || socket.id,
+      isRaised: Boolean(isRaised),
+      name: name || currentUser?.name || 'Participant',
+      timestamp: Date.now()
+    });
+  });
+
+  socket.on('participant:reaction', ({ roomId, reaction, senderName }) => {
+    const targetRoomId = roomId || currentRoomId;
+    if (!targetRoomId || !reaction) return;
+    io.to(targetRoomId).emit('participant:reaction', {
+      id: `react-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      reaction,
+      senderName: senderName || currentUser?.name || 'Participant',
+      timestamp: Date.now()
+    });
+    // Also emit reaction:received for legacy components
+    io.to(targetRoomId).emit('reaction:received', {
+      id: `react-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      emoji: reaction,
+      sender: senderName || currentUser?.name || 'Participant',
+      timestamp: Date.now()
+    });
+  });
+
+  socket.on('host:mute-participant', ({ roomId, participantId }) => {
+    const targetRoomId = roomId || currentRoomId;
+    if (!targetRoomId || !participantId) return;
+    const room = rooms.get(targetRoomId);
+    if (!room || !isHostUser(room, socket.id, currentUser)) return;
+
+    io.to(targetRoomId).emit('host:mute-participant', {
+      participantId,
+      hostName: currentUser?.name || 'Host'
+    });
+  });
+
+  socket.on('host:mute-all', ({ roomId }) => {
+    const targetRoomId = roomId || currentRoomId;
+    if (!targetRoomId) return;
+    const room = rooms.get(targetRoomId);
+    if (!room || !isHostUser(room, socket.id, currentUser)) return;
+
+    io.to(targetRoomId).emit('host:mute-all', {
+      hostId: socket.id,
+      hostName: currentUser?.name || 'Host'
+    });
+  });
+
+  socket.on('host:lower-hand', ({ roomId, participantId }) => {
+    const targetRoomId = roomId || currentRoomId;
+    if (!targetRoomId || !participantId) return;
+    const room = rooms.get(targetRoomId);
+    if (!room || !isHostUser(room, socket.id, currentUser)) return;
+
+    io.to(targetRoomId).emit('host:lower-hand', {
+      participantId,
+      hostName: currentUser?.name || 'Host'
+    });
+    io.to(targetRoomId).emit('participant:hand-raised', {
+      participantId,
+      isRaised: false,
+      timestamp: Date.now()
+    });
+  });
+
+  socket.on('host:ask-to-unmute', ({ roomId, participantId }) => {
+    const targetRoomId = roomId || currentRoomId;
+    if (!targetRoomId || !participantId) return;
+    const room = rooms.get(targetRoomId);
+    if (!room || !isHostUser(room, socket.id, currentUser)) return;
+
+    io.to(targetRoomId).emit('host:ask-to-unmute', {
+      participantId,
+      hostName: currentUser?.name || 'Host'
+    });
+  });
+
+  socket.on('host:spotlight-participant', ({ roomId, participantId }) => {
+    const targetRoomId = roomId || currentRoomId;
+    if (!targetRoomId || !participantId) return;
+    const room = rooms.get(targetRoomId);
+    if (!room || !isHostUser(room, socket.id, currentUser)) return;
+
+    io.to(targetRoomId).emit('host:spotlight-participant', {
+      participantId,
+      hostName: currentUser?.name || 'Host'
+    });
+  });
+
   // 16. Room Settings Update (DJ mode, etc.)
   socket.on('settings:update', (newSettings) => {
     if (!currentRoomId) return;

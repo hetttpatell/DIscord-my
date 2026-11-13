@@ -64,6 +64,18 @@ export function useLocalMedia() {
     mediaController.cleanupOnLeaveRoom();
   }, []);
 
+  const setAudioInput = useCallback(async (deviceId) => {
+    return mediaController.setAudioInput(deviceId);
+  }, []);
+
+  const setVideoInput = useCallback(async (deviceId) => {
+    return mediaController.setVideoInput(deviceId);
+  }, []);
+
+  const setAudioOutput = useCallback((deviceId) => {
+    mediaController.setAudioOutput(deviceId);
+  }, []);
+
   return {
     stream: mediaState?.stream || null,
     streamVersion,
@@ -77,6 +89,9 @@ export function useLocalMedia() {
     isSecureContext: Boolean(mediaState?.isSecureContext),
     isAudioMutedBySystem: Boolean(mediaState?.isAudioMutedBySystem),
     isVideoMutedBySystem: Boolean(mediaState?.isVideoMutedBySystem),
+    selectedMicId: mediaState?.selectedMicId || '',
+    selectedCameraId: mediaState?.selectedCameraId || '',
+    selectedSpeakerId: mediaState?.selectedSpeakerId || '',
     toggleMic,
     enableMic,
     disableMic,
@@ -86,7 +101,10 @@ export function useLocalMedia() {
     switchCamera,
     startAudio,
     startVideo,
-    stopAll
+    stopAll,
+    setAudioInput,
+    setVideoInput,
+    setAudioOutput
   };
 }
 

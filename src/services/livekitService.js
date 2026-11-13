@@ -5,8 +5,8 @@
  */
 
 import { Room, RoomEvent, Track } from 'livekit-client';
-import { getBackendUrl } from './socket';
-import { isDebug } from './peerConnectionService';
+import { getBackendUrl } from './socket.js';
+import { isDebug } from './peerConnectionService.js';
 
 function traceLog(...args) {
   if (isDebug()) {

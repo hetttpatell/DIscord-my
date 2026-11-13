@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import peerConnectionService from '../services/peerConnectionService';
 import livekitService from '../services/livekitService';
+import mediaService from '../services/mediaService';
 import AudioUnlockBanner from './AudioUnlockBanner';
 
 function RemoteAudioItem({ peer, onAutoplayBlocked }) {
@@ -13,6 +14,16 @@ function RemoteAudioItem({ peer, onAutoplayBlocked }) {
     if (el.srcObject !== peer.stream) {
       el.srcObject = peer.stream;
     }
+
+    if (typeof el.setSinkId === 'function' && mediaService.selectedSpeakerId) {
+      el.setSinkId(mediaService.selectedSpeakerId).catch(() => {});
+    }
+
+    const unsubOutput = mediaService.subscribe((event, payload) => {
+      if (event === 'audio-output-changed' && typeof el.setSinkId === 'function') {
+        el.setSinkId(payload?.deviceId || '').catch(() => {});
+      }
+    });
 
     // Microphone is on if there is a live audio track with enabled=true; fall back to media-state only when no track exists yet
     const audioTracks = peer.stream.getAudioTracks();
@@ -48,6 +59,7 @@ function RemoteAudioItem({ peer, onAutoplayBlocked }) {
     peer.stream.addEventListener('removetrack', handleTrackChange);
 
     return () => {
+      unsubOutput();
       peer.stream.removeEventListener('addtrack', handleTrackChange);
       peer.stream.removeEventListener('removetrack', handleTrackChange);
     };

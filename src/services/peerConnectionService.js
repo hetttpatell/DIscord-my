@@ -5,7 +5,7 @@
  * track hot-swapping, ICE restarts, and connection stats.
  */
 
-import socket, { getBackendUrl } from './socket';
+import socket, { getBackendUrl } from './socket.js';
 
 // Default ICE server fallback in case backend endpoint is unreachable (STUN only)
 const DEFAULT_ICE_CONFIG = {

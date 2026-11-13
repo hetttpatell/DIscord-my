@@ -5,20 +5,46 @@ import {
   Video, 
   VideoOff, 
   SwitchCamera, 
-  Settings, 
   ArrowRight, 
   ShieldCheck, 
-  CheckCircle2, 
   AlertCircle,
-  Clock,
   Sparkles,
-  Volume2
+  Settings
 } from 'lucide-react';
-import mediaService from '../services/mediaService';
-import mediaController from '../services/mediaController';
-import peerConnectionService from '../services/peerConnectionService';
-import livekitService from '../services/livekitService';
-import InsecureContextBanner from './InsecureContextBanner';
+import mediaService from '../services/mediaService.js';
+import mediaController from '../services/mediaController.js';
+import peerConnectionService from '../services/peerConnectionService.js';
+import livekitService from '../services/livekitService.js';
+import InsecureContextBanner from './InsecureContextBanner.jsx';
+import MeetingSettingsModal from './MeetingSettingsModal.jsx';
+
+const AVATAR_PALETTE = [
+  '#1a73e8', // Google Blue
+  '#ea4335', // Google Red
+  '#f9ab00', // Google Amber
+  '#34a853', // Google Green
+  '#a142f4', // Purple
+  '#e37400', // Orange
+  '#00897b', // Teal
+  '#d81b60', // Pink
+];
+
+function getDeterministicColor(str = '') {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
+}
+
+function getInitials(name = '') {
+  if (!name || typeof name !== 'string') return '?';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+}
 
 export default function MeetingLobby({
   initialRoomId = '',
@@ -40,6 +66,7 @@ export default function MeetingLobby({
   const [permissionError, setPermissionError] = useState(null);
   const [lastFailedAction, setLastFailedAction] = useState(null); // 'mic' | 'camera'
   const [showInsecureBanner, setShowInsecureBanner] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [isSecureContext, setIsSecureContext] = useState(
     typeof window !== 'undefined' ? (Boolean(window.isSecureContext) && typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices)) : false
   );
@@ -226,9 +253,9 @@ export default function MeetingLobby({
                       ? 'ring-[#34a853]/40'
                       : 'ring-white/10'
                   }`}
-                  style={{ backgroundColor: '#5865f2' }}
+                  style={{ backgroundColor: getDeterministicColor(userName || 'User') }}
                 >
-                  {userName?.charAt(0).toUpperCase() || 'U'}
+                  {getInitials(userName || 'User')}
                 </div>
                 <span className="text-sm font-semibold text-white">Camera is off</span>
                 <span className="text-xs text-[#9aa0a6] mt-0.5">Click camera button below to turn on</span>
@@ -237,18 +264,33 @@ export default function MeetingLobby({
 
             {/* Audio Waveform Speaking Ring Overlay */}
             {isSpeaking && (
-              <div className="absolute top-4 left-4 flex items-center gap-2 px-3 py-1 rounded-full bg-black/70 backdrop-blur-md border border-[#34a853] text-[#34a853] text-xs font-bold animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-[#34a853]" />
+              <div className="absolute top-4 left-4 flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#202124]/90 backdrop-blur-md border border-[#34a853] text-[#34a853] text-xs font-semibold shadow-lg animate-fade-in">
+                <div className="flex items-center gap-0.5 h-3">
+                  <span className="w-1 bg-[#34a853] rounded-full animate-[bounce_0.8s_infinite_100ms] h-3" />
+                  <span className="w-1 bg-[#34a853] rounded-full animate-[bounce_0.8s_infinite_300ms] h-2" />
+                  <span className="w-1 bg-[#34a853] rounded-full animate-[bounce_0.8s_infinite_200ms] h-3.5" />
+                </div>
                 <span>Microphone active</span>
               </div>
             )}
+
+            {/* Settings / Device Check Button */}
+            <button
+              type="button"
+              onClick={() => setShowSettings(true)}
+              className="absolute bottom-4 left-4 p-2.5 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md text-white border border-white/10 shadow transition-all active:scale-95 flex items-center gap-1.5 text-xs font-medium cursor-pointer"
+              title="Audio and video settings"
+            >
+              <Settings className="w-4 h-4 text-[#8ab4f8]" />
+              <span className="hidden sm:inline">Settings</span>
+            </button>
 
             {/* Mobile Flip Camera */}
             {isCameraOn && (
               <button
                 type="button"
                 onClick={handleFlipCamera}
-                className="absolute top-4 right-4 w-9 h-9 rounded-full bg-black/70 backdrop-blur-md text-white flex items-center justify-center hover:bg-black/90 active:scale-95 shadow"
+                className="absolute top-4 right-4 w-9 h-9 rounded-full bg-black/70 backdrop-blur-md text-white flex items-center justify-center hover:bg-black/90 active:scale-95 shadow cursor-pointer"
                 title="Flip Camera"
               >
                 <SwitchCamera className="w-4 h-4" />
@@ -261,7 +303,7 @@ export default function MeetingLobby({
               <button
                 type="button"
                 onClick={handleToggleMic}
-                className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shadow active:scale-95 touch-manipulation ${
+                className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shadow active:scale-95 touch-manipulation cursor-pointer ${
                   isMicOn
                     ? 'bg-[#3c4043] text-white hover:bg-[#4a4e52] border border-[#5f6368]/30'
                     : 'bg-[#ea4335] text-white shadow-md shadow-[#ea4335]/30'
@@ -275,7 +317,7 @@ export default function MeetingLobby({
               <button
                 type="button"
                 onClick={handleToggleCamera}
-                className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shadow active:scale-95 ${
+                className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shadow active:scale-95 cursor-pointer ${
                   isCameraOn
                     ? 'bg-[#3c4043] text-white hover:bg-[#4a4e52] border border-[#5f6368]/30'
                     : 'bg-[#ea4335] text-white shadow-md shadow-[#ea4335]/30'
@@ -414,7 +456,7 @@ export default function MeetingLobby({
                 <button
                   type="button"
                   onClick={onSwitchToClassic}
-                  className="w-full text-center text-xs text-[#9aa0a6] hover:text-white underline underline-offset-4 pt-1"
+                  className="w-full text-center text-xs text-[#9aa0a6] hover:text-white underline underline-offset-4 pt-1 cursor-pointer"
                 >
                   Or use classic lounge room creator
                 </button>
@@ -433,6 +475,15 @@ export default function MeetingLobby({
         </div>
 
       </div>
+
+      {/* Pre-Join Device & Audio/Video Settings Modal */}
+      <MeetingSettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        currentUser={{ name: userName }}
+        onUpdateUserName={(name) => setUserName(name)}
+        isSecureContext={isSecureContext}
+      />
     </div>
   );
 }

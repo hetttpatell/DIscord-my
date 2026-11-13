@@ -10,6 +10,7 @@ class MediaService {
     this.facingMode = 'user'; // 'user' (front) | 'environment' (back)
     this.selectedCameraId = null;
     this.selectedMicId = null;
+    this.selectedSpeakerId = null;
 
     this.isMicOn = false;
     this.isCameraOn = false;
@@ -257,7 +258,7 @@ class MediaService {
     const constraintTiers = [
       {
         video: {
-          facingMode: this.facingMode,
+          ...(this.selectedCameraId ? { deviceId: { ideal: this.selectedCameraId } } : { facingMode: this.facingMode }),
           width: { ideal: 640 },
           height: { ideal: 360 },
           frameRate: { ideal: 24, max: 30 }
@@ -265,7 +266,9 @@ class MediaService {
         audio: false
       },
       {
-        video: { facingMode: this.facingMode },
+        video: {
+          ...(this.selectedCameraId ? { deviceId: { ideal: this.selectedCameraId } } : { facingMode: this.facingMode })
+        },
         audio: false
       },
       {
@@ -379,6 +382,22 @@ class MediaService {
       }
       return newTrack;
     }
+  }
+
+  /**
+   * Set speaker/audiooutput device ID and apply to all audio elements via setSinkId
+   */
+  setAudioOutput(deviceId) {
+    this.selectedSpeakerId = deviceId || null;
+    if (typeof document !== 'undefined') {
+      const audioEls = document.querySelectorAll('audio');
+      audioEls.forEach(el => {
+        if (typeof el.setSinkId === 'function') {
+          el.setSinkId(deviceId || '').catch(() => {});
+        }
+      });
+    }
+    this.notify('audio-output-changed', { deviceId });
   }
 
   /**

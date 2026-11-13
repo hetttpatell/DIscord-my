@@ -1,17 +1,17 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   ArrowLeft,
   Copy,
   Check,
-  Share2,
   Tv,
   LayoutGrid,
-  Users,
-  MessageSquare,
-  X,
-  Send,
   ScreenShare,
-  AlertCircle
+  AlertCircle,
+  Sparkles,
+  Maximize2,
+  Columns,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import useLocalMedia from '../hooks/useLocalMedia';
 import useWebRTC from '../hooks/useWebRTC';
@@ -19,14 +19,18 @@ import VideoTile from './VideoTile';
 import CallControls from './CallControls';
 import InsecureContextBanner from './InsecureContextBanner';
 import MeetingSettingsModal from './MeetingSettingsModal';
+import MeetingSidePanel from './MeetingSidePanel.jsx';
+import MeetingToasts from './MeetingToasts.jsx';
 import socket from '../services/socket';
+import { computeLayout } from '../layout/computeLayout.js';
+import { participantsStore, useParticipantsList, useActiveSpeakerId } from '../state/participantsStore.js';
 
 export default function VideoCallGrid({
   room,
   currentUser,
   members = [],
-  layoutMode = 'strip', // 'strip' (Theater stage + camera strip) | 'grid' (Google Meet full grid)
-  onToggleLayoutMode,
+  layoutMode: _externalLayoutMode = 'strip',
+  onToggleLayoutMode: _onToggleLayoutMode,
   onLeaveRoom,
   children
 }) {
@@ -35,22 +39,46 @@ export default function VideoCallGrid({
   const [screenShareStream, setScreenShareStream] = useState(null);
   const [pinnedPeerId, setPinnedPeerId] = useState(null);
 
-  // Modals & Panels
+  // Layout Engine States
+  const [layoutChoice, setLayoutChoice] = useState(() => {
+    try {
+      return localStorage.getItem('tt_layout_mode') || 'auto';
+    } catch {
+      return 'auto';
+    }
+  });
+  const [showLayoutMenu, setShowLayoutMenu] = useState(false);
+  const [pageIndex, setPageIndex] = useState(0);
+
+  // Draggable PiP corner state (defaults to bottom-right)
+  const [pipCorner, setPipCorner] = useState(() => {
+    try {
+      return localStorage.getItem('tt_pip_corner') || 'bottom-right';
+    } catch {
+      return 'bottom-right';
+    }
+  });
+  const [pipDragPos, setPipDragPos] = useState(null); // { x, y } during active drag
+  const pipDragStartRef = useRef(null);
+
+  // Container viewport measurements with ResizeObserver (throttled to 1 update per RAF)
+  const gridContainerRef = useRef(null);
+  const [viewport, setViewport] = useState({ width: 1280, height: 720, isMobile: false });
+  const rafIdRef = useRef(null);
+
+  // Modals & Panels: exactly one active side panel at a time ('people' | 'chat' | 'details' | null)
   const [showSettings, setShowSettings] = useState(false);
-  const [showInCallChat, setShowInCallChat] = useState(false);
-  const [showParticipantsList, setShowParticipantsList] = useState(false);
+  const [activeSidePanel, setActiveSidePanel] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // In-call chat input
-  const [chatInput, setChatInput] = useState('');
   const [inCallMessages, setInCallMessages] = useState([]);
-  const chatBottomRef = useRef(null);
 
-  // 1. Local Media Hook (Camera, Mic, Speaking detector)
+  // 1. Local Media Hook
   const {
     stream: localStream,
     isMicOn,
     isCameraOn,
+    micState,
+    cameraState,
     facingMode,
     isSpeaking: isLocalSpeaking,
     isSecureContext,
@@ -60,7 +88,168 @@ export default function VideoCallGrid({
     startAudio
   } = useLocalMedia();
 
-  // 2. WebRTC / LiveKit Unified Real-Time Hook
+  // In-Call Toasts System
+  const [toasts, setToasts] = useState([]);
+  const addToast = useCallback((toast) => {
+    const id = Date.now() + Math.random().toString(36).slice(2, 6);
+    const newToast = { ...toast, id };
+    setToasts(prev => [...prev.slice(-3), newToast]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
+  }, []);
+
+  const dismissToast = useCallback((id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  // Floating reactions on stage
+  const [floatingReactions, setFloatingReactions] = useState([]);
+  const addFloatingReaction = useCallback((emoji, sender) => {
+    const id = `float-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const left = Math.floor(Math.random() * 70) + 15;
+    setFloatingReactions(prev => [...prev.slice(-15), { id, emoji, sender, left }]);
+    setTimeout(() => {
+      setFloatingReactions(prev => prev.filter(r => r.id !== id));
+    }, 2400);
+  }, []);
+
+  useEffect(() => {
+    const onReaction = (payload) => {
+      const emoji = payload?.reaction || payload?.emoji;
+      if (!emoji) return;
+      const sender = payload?.senderName || payload?.sender || '';
+      addFloatingReaction(emoji, sender);
+    };
+
+    socket.on('participant:reaction', onReaction);
+    socket.on('reaction:received', onReaction);
+    return () => {
+      socket.off('participant:reaction', onReaction);
+      socket.off('reaction:received', onReaction);
+    };
+  }, [addFloatingReaction]);
+
+  // Hand Raise State
+  const [isHandRaised, setIsHandRaised] = useState(false);
+  const handleToggleHandRaise = useCallback(() => {
+    setIsHandRaised(prev => {
+      const next = !prev;
+      const localId = currentUser?.id || socket.id || 'local';
+      participantsStore.setHandRaised(localId, next ? Date.now() : null);
+      socket.emit('participant:hand-raise', {
+        roomId: room?.id,
+        participantId: localId,
+        isRaised: next,
+        name: currentUser?.name || 'You'
+      });
+      return next;
+    });
+  }, [currentUser, room?.id]);
+
+  // Host Action Senders
+  const isHost = Boolean(currentUser?.isHost);
+
+  const handleMuteParticipant = useCallback((participantId) => {
+    if (!isHost) return;
+    socket.emit('host:mute-participant', { roomId: room?.id, participantId });
+  }, [isHost, room?.id]);
+
+  const handleMuteAll = useCallback(() => {
+    if (!isHost) return;
+    socket.emit('host:mute-all', { roomId: room?.id });
+    addToast({ type: 'device', message: 'All participants muted' });
+  }, [isHost, room?.id, addToast]);
+
+  const handleLowerHand = useCallback((participantId) => {
+    if (!isHost) return;
+    socket.emit('host:lower-hand', { roomId: room?.id, participantId });
+  }, [isHost, room?.id]);
+
+  const handleAskToUnmute = useCallback((participantId) => {
+    if (!isHost) return;
+    socket.emit('host:ask-to-unmute', { roomId: room?.id, participantId });
+    addToast({ type: 'device', message: 'Asked participant to unmute' });
+  }, [isHost, room?.id, addToast]);
+
+  const handleSpotlight = useCallback((participantId) => {
+    if (!isHost) return;
+    socket.emit('host:spotlight-participant', { roomId: room?.id, participantId });
+  }, [isHost, room?.id]);
+
+  // Host Action Receivers
+  useEffect(() => {
+    const localId = currentUser?.id || socket.id || 'local';
+
+    const onMuteParticipant = (payload) => {
+      if (payload?.participantId === localId) {
+        mediaController.disableMic();
+        addToast({ type: 'device', message: 'You were muted by the host' });
+      }
+    };
+
+    const onMuteAll = (payload) => {
+      if (!isHost && payload?.hostId !== socket.id) {
+        mediaController.disableMic();
+        addToast({ type: 'device', message: 'You were muted by the host' });
+      }
+    };
+
+    const onLowerHand = (payload) => {
+      if (payload?.participantId === localId) {
+        setIsHandRaised(false);
+        participantsStore.setHandRaised(localId, null);
+        addToast({ type: 'hand', message: 'Your hand was lowered by the host' });
+      } else if (payload?.participantId) {
+        participantsStore.setHandRaised(payload.participantId, null);
+      }
+    };
+
+    const onAskToUnmute = (payload) => {
+      if (payload?.participantId === localId) {
+        addToast({ 
+          type: 'device', 
+          message: `${payload.hostName || 'The host'} is asking you to unmute` 
+        });
+      }
+    };
+
+    const onSpotlight = (payload) => {
+      if (payload?.participantId) {
+        setPinnedPeerId(payload.participantId);
+        addToast({ 
+          type: 'device', 
+          message: `${payload.hostName || 'The host'} spotlighted a participant` 
+        });
+      }
+    };
+
+    socket.on('host:mute-participant', onMuteParticipant);
+    socket.on('host:mute-all', onMuteAll);
+    socket.on('host:lower-hand', onLowerHand);
+    socket.on('host:ask-to-unmute', onAskToUnmute);
+    socket.on('host:spotlight-participant', onSpotlight);
+
+    return () => {
+      socket.off('host:mute-participant', onMuteParticipant);
+      socket.off('host:mute-all', onMuteAll);
+      socket.off('host:lower-hand', onLowerHand);
+      socket.off('host:ask-to-unmute', onAskToUnmute);
+      socket.off('host:spotlight-participant', onSpotlight);
+    };
+  }, [currentUser?.id, isHost, addToast]);
+
+  // Reactions
+  const handleSendReaction = useCallback((emoji) => {
+    socket.emit('participant:reaction', {
+      roomId: room?.id,
+      reaction: emoji,
+      senderName: currentUser?.name || 'You'
+    });
+    socket.emit('reaction:send', { emoji });
+  }, [room?.id, currentUser?.name]);
+
+  // 2. WebRTC / LiveKit Real-Time Hook
   const {
     peers,
     activeEngine,
@@ -80,6 +269,56 @@ export default function VideoCallGrid({
     }
   });
 
+  // 3. Participant Store Integration
+  const storeParticipants = useParticipantsList();
+  const activeSpeakerId = useActiveSpeakerId();
+
+  useEffect(() => {
+    participantsStore.init({ currentUser, roomId: room?.id });
+    if (members?.length > 0) {
+      participantsStore.setSignalingMembers(members);
+    }
+  }, [currentUser, room?.id, members]);
+
+  useEffect(() => {
+    if (peers) {
+      participantsStore.syncPeers(peers);
+    }
+  }, [peers]);
+
+  useEffect(() => {
+    participantsStore.updateLocalMediaState({
+      isMicOn,
+      isCameraOn,
+      stream: localStream,
+      isScreenSharing
+    });
+  }, [isMicOn, isCameraOn, localStream, isScreenSharing]);
+
+  // Viewport ResizeObserver (throttled to 1 update per RAF)
+  useEffect(() => {
+    const el = gridContainerRef.current;
+    if (!el) return;
+
+    const observer = new ResizeObserver(entries => {
+      if (!entries || entries.length === 0) return;
+      const { width, height } = entries[0].contentRect;
+      if (width <= 0 || height <= 0) return;
+
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = requestAnimationFrame(() => {
+        const isMobile = width < 640 || (typeof navigator !== 'undefined' && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || ''));
+        setViewport({ width: Math.round(width), height: Math.round(height), isMobile });
+      });
+    });
+
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
+    };
+  }, []);
+
   // Acquire microphone on join if not already acquired from lobby
   useEffect(() => {
     let mounted = true;
@@ -97,26 +336,71 @@ export default function VideoCallGrid({
       sendMediaState({ isMuted: !isMicOn, isCameraOff: !isCameraOn, isScreenSharing: false });
     }
 
-    // Policy: Never stop tracks on unmount / StrictMode remount. Cleanup happens only on leaving room.
     return () => {
       mounted = false;
     };
   }, []); // Run once on room entry
 
-  // Sync in-call chat with room socket
+  // Sync in-call chat with room socket & toast notifications
   useEffect(() => {
     const handleChat = (msg) => {
       setInCallMessages(prev => [...prev.slice(-100), msg]);
+      if (activeSidePanel !== 'chat' && msg && msg.sender !== (currentUser?.name || 'You')) {
+        addToast({
+          type: 'chat',
+          message: `${msg.sender}: ${msg.text || ''}`
+        });
+      }
     };
     socket.on('chat:message', handleChat);
     return () => socket.off('chat:message', handleChat);
-  }, []);
+  }, [activeSidePanel, currentUser?.name, addToast]);
 
+  // Hand-raised socket listener
   useEffect(() => {
-    if (showInCallChat) {
-      chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const onHandRaised = (payload) => {
+      if (!payload) return;
+      const { participantId, isRaised, name } = payload;
+      participantsStore.setHandRaised(participantId, isRaised ? Date.now() : null);
+      if (isRaised && participantId !== (currentUser?.id || socket.id)) {
+        addToast({
+          type: 'hand',
+          message: `${name || 'A participant'} raised hand`
+        });
+      }
+    };
+    socket.on('participant:hand-raised', onHandRaised);
+    return () => socket.off('participant:hand-raised', onHandRaised);
+  }, [currentUser?.id, addToast]);
+
+  // Track member joins & leaves for toast notifications
+  const prevMembersRef = useRef(new Map());
+  useEffect(() => {
+    const currentMap = new Map();
+    (members || []).forEach(m => {
+      if (m?.id) currentMap.set(m.id, m.name || 'Participant');
+    });
+
+    if (prevMembersRef.current.size > 0) {
+      currentMap.forEach((name, id) => {
+        if (!prevMembersRef.current.has(id) && id !== currentUser?.id) {
+          addToast({
+            type: 'join',
+            message: `${name} joined the meeting`
+          });
+        }
+      });
+      prevMembersRef.current.forEach((name, id) => {
+        if (!currentMap.has(id) && id !== currentUser?.id) {
+          addToast({
+            type: 'leave',
+            message: `${name} left the meeting`
+          });
+        }
+      });
     }
-  }, [inCallMessages, showInCallChat]);
+    prevMembersRef.current = currentMap;
+  }, [members, currentUser?.id, addToast]);
 
   // Handle Fullscreen toggle
   const toggleFullscreen = () => {
@@ -196,13 +480,7 @@ export default function VideoCallGrid({
     }
   };
 
-  // Send message in chat
-  const handleSendMessage = (e) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
-    socket.emit('chat:message', { text: chatInput.trim() });
-    setChatInput('');
-  };
+
 
   // Global touch / click listener to unlock autoplay on mobile browsers
   useEffect(() => {
@@ -218,6 +496,16 @@ export default function VideoCallGrid({
     };
   }, [unlockAudio]);
 
+  // Layout mode switcher helper
+  const handleSelectLayoutMode = (mode) => {
+    setLayoutChoice(mode);
+    setShowLayoutMenu(false);
+    setPageIndex(0);
+    try {
+      localStorage.setItem('tt_layout_mode', mode);
+    } catch {}
+  };
+
   // Invite URL copy / share helpers
   const inviteUrl = typeof window !== 'undefined' ? `${window.location.origin}/?room=${room?.id || ''}` : '';
 
@@ -228,77 +516,185 @@ export default function VideoCallGrid({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const shareInviteLink = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `Join our meeting: ${room?.name || 'afterspot'}`,
-          url: inviteUrl
-        });
-        return;
-      } catch {}
+  // Combine store participants and ensure local user is included
+  const currentUserId = currentUser?.id || 'local';
+  const participantsList = useMemo(() => {
+    const list = [...storeParticipants];
+    const hasLocal = list.some(p => p.isLocal || p.id === currentUserId);
+    if (!hasLocal) {
+      list.unshift({
+        id: currentUserId,
+        clientId: currentUser?.clientId || currentUserId,
+        name: currentUser?.name || 'You',
+        isLocal: true,
+        isHost: Boolean(currentUser?.isHost),
+        avatarColor: currentUser?.avatarColor || '#5865f2',
+        audioEnabled: isMicOn,
+        videoEnabled: isCameraOn,
+        isScreenSharing,
+        stream: localStream,
+        connectionQuality: 'good',
+        joinedAt: 0
+      });
     }
-    copyInviteLink();
+    return list;
+  }, [storeParticipants, currentUserId, currentUser, isMicOn, isCameraOn, isScreenSharing, localStream]);
+
+  // Determine presenter / stageActive
+  const presentingParticipant = participantsList.find(p => p.isScreenSharing) || (isScreenSharing ? { id: currentUserId, isLocal: true } : null);
+  const presentingId = presentingParticipant?.id || null;
+  const stageActive = Boolean(room?.currentTrack);
+
+  // Compute Layout using pure engine
+  const layoutResult = useMemo(() => {
+    return computeLayout({
+      participants: participantsList,
+      mode: layoutChoice,
+      pinnedId: pinnedPeerId,
+      activeSpeakerId: activeSpeakerId || (isLocalSpeaking ? currentUserId : null),
+      presentingId,
+      stageActive,
+      viewport,
+      pageIndex,
+      gap: 8
+    });
+  }, [
+    participantsList,
+    layoutChoice,
+    pinnedPeerId,
+    activeSpeakerId,
+    isLocalSpeaking,
+    currentUserId,
+    presentingId,
+    stageActive,
+    viewport,
+    pageIndex
+  ]);
+
+  // Mobile horizontal swipe gestures for pagination
+  const touchStartXRef = useRef(null);
+  const touchStartYRef = useRef(null);
+
+  const handleTouchStart = (e) => {
+    touchStartXRef.current = e.touches[0].clientX;
+    touchStartYRef.current = e.touches[0].clientY;
   };
 
-  // Derive remote participants combining room members and active WebRTC peers
-  const currentUserId = currentUser?.id;
-  const peerList = Object.values(peers);
+  const handleTouchEnd = (e) => {
+    if (touchStartXRef.current === null) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartXRef.current;
+    const deltaY = e.changedTouches[0].clientY - touchStartYRef.current;
+    touchStartXRef.current = null;
+    touchStartYRef.current = null;
 
-  const memberPeers = (members || [])
-    .filter(m => m.id !== currentUserId)
-    .map(m => {
-      const activePeer = peers[m.id];
-      return activePeer || {
-        peerId: m.id,
-        userName: m.name,
-        avatarColor: m.avatarColor,
-        isMuted: true,
-        isCameraOff: true,
-        isSpeaking: false,
-        connectionQuality: 'good',
-        stream: null
-      };
-    });
-
-  const remoteMap = new Map();
-  memberPeers.forEach(p => remoteMap.set(p.peerId, p));
-  peerList.forEach(p => {
-    if (p && p.peerId !== currentUserId) {
-      remoteMap.set(p.peerId, p);
+    if (Math.abs(deltaX) > 40 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+      if (deltaX < 0 && pageIndex < layoutResult.pageCount - 1) {
+        setPageIndex(p => p + 1);
+      } else if (deltaX > 0 && pageIndex > 0) {
+        setPageIndex(p => p - 1);
+      }
     }
-  });
-  const remoteParticipants = Array.from(remoteMap.values());
-  const totalCallCount = remoteParticipants.length + 1;
-  const isAlone = remoteParticipants.length === 0;
+  };
 
-  // Selected spotlight/pinned participant
-  const pinnedParticipant = pinnedPeerId
-    ? (pinnedPeerId === currentUserId
-        ? { isLocal: true, userName: currentUser?.name || 'You', stream: localStream, isMuted: !isMicOn, isCameraOff: !isCameraOn, isSpeaking: isLocalSpeaking }
-        : remoteParticipants.find(p => p.peerId === pinnedPeerId))
-    : null;
+  // PiP Dragging & Corner Snapping
+  const handlePipPointerDown = (e) => {
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    pipDragStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      initialLeft: rect.left,
+      initialTop: rect.top
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
 
-  // Layout mode helper: true only in default theater strip mode without spotlight or screen share
-  const isTheaterMode = layoutMode === 'strip' && !pinnedParticipant && !(isScreenSharing && screenShareStream);
+  const handlePipPointerMove = (e) => {
+    if (!pipDragStartRef.current) return;
+    const deltaX = e.clientX - pipDragStartRef.current.startX;
+    const deltaY = e.clientY - pipDragStartRef.current.startY;
+    const containerRect = gridContainerRef.current?.getBoundingClientRect();
+    if (!containerRect) return;
+
+    const currentX = pipDragStartRef.current.initialLeft - containerRect.left + deltaX;
+    const currentY = pipDragStartRef.current.initialTop - containerRect.top + deltaY;
+    setPipDragPos({ x: currentX, y: currentY });
+  };
+
+  const handlePipPointerUp = () => {
+    if (!pipDragStartRef.current) return;
+    pipDragStartRef.current = null;
+
+    // Determine nearest of 4 corners
+    const containerRect = gridContainerRef.current?.getBoundingClientRect();
+    if (!containerRect || !pipDragPos) {
+      setPipDragPos(null);
+      return;
+    }
+
+    const midX = containerRect.width / 2;
+    const midY = containerRect.height / 2;
+    const isLeft = pipDragPos.x < midX;
+    const isTop = pipDragPos.y < midY;
+
+    let nearest = 'bottom-right';
+    if (isTop && isLeft) nearest = 'top-left';
+    else if (isTop && !isLeft) nearest = 'top-right';
+    else if (!isTop && isLeft) nearest = 'bottom-left';
+    else nearest = 'bottom-right';
+
+    setPipCorner(nearest);
+    setPipDragPos(null);
+    try {
+      localStorage.setItem('tt_pip_corner', nearest);
+    } catch {}
+  };
+
+  // Calculate PiP coordinates based on snapped corner or active drag
+  const pipPlacement = useMemo(() => {
+    if (!layoutResult.pip) return null;
+    const { width: pipW, height: pipH } = layoutResult.pip;
+    const margin = 16;
+
+    if (pipDragPos) {
+      return {
+        x: Math.max(margin, Math.min(viewport.width - pipW - margin, pipDragPos.x)),
+        y: Math.max(margin, Math.min(viewport.height - pipH - margin, pipDragPos.y)),
+        width: pipW,
+        height: pipH
+      };
+    }
+
+    let x = viewport.width - pipW - margin;
+    let y = viewport.height - pipH - margin;
+
+    if (pipCorner === 'top-left') {
+      x = margin;
+      y = margin;
+    } else if (pipCorner === 'top-right') {
+      x = viewport.width - pipW - margin;
+      y = margin;
+    } else if (pipCorner === 'bottom-left') {
+      x = margin;
+      y = viewport.height - pipH - margin;
+    }
+
+    return { x: Math.round(x), y: Math.round(y), width: pipW, height: pipH };
+  }, [layoutResult.pip, pipCorner, pipDragPos, viewport]);
+
+  // Stage Tile presence in layout (Hard Constraint 1)
+  const stageTile = layoutResult.tiles.find(t => t.id === 'stage') || null;
+  const isStageMainContent = Boolean(stageTile);
+
+  const totalCallCount = participantsList.length;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-[#121212] overflow-hidden relative select-none">
-      {/* Insecure Context Banner (HTTP on Mobile) */}
+      {/* Insecure Context Banner */}
       <InsecureContextBanner isSecureContext={isSecureContext} />
 
-      {/* Network Restriction / Connection Trouble Notice */}
-      {remoteParticipants.some(p => p.troubleConnecting) && (
-        <div className="mx-3 sm:mx-4 mt-2 px-3 py-2 bg-amber-950/80 border border-amber-500/50 rounded-lg text-amber-200 text-xs flex items-center gap-2 shadow-lg z-40">
-          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-          <span>
-            Having trouble connecting to {remoteParticipants.filter(p => p.troubleConnecting).map(p => p.userName || 'a participant').join(', ')}. This may be a network restriction.
-          </span>
-        </div>
-      )}
-
-      {/* LiveKit SFU Fallback / Relay Notice */}
-      {connectionNotice && !remoteParticipants.some(p => p.troubleConnecting) && (
+      {/* Network / Relay Notice */}
+      {connectionNotice && (
         <div className="mx-3 sm:mx-4 mt-2 px-3 py-2 bg-neutral-900/90 border border-neutral-700 rounded-lg text-neutral-300 text-xs flex items-center gap-2 shadow-lg z-40">
           <AlertCircle className="w-4 h-4 text-neutral-400 shrink-0" />
           <span>{connectionNotice}</span>
@@ -337,7 +733,7 @@ export default function VideoCallGrid({
         </div>
 
         {/* Action Pills */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 relative">
           <button
             onClick={copyInviteLink}
             className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#202124] hover:bg-[#3c4043] border border-[#3c4043]/50 text-xs text-[#e8eaed] transition-colors"
@@ -347,413 +743,341 @@ export default function VideoCallGrid({
             <span>{copied ? 'Copied' : 'Share'}</span>
           </button>
 
-          <button
-            onClick={onToggleLayoutMode}
-            className="w-9 h-9 rounded-full flex items-center justify-center text-[#e8eaed] hover:bg-[#3c4043]/60 active:scale-95 transition-all"
-            title={layoutMode === 'grid' ? "Switch to Theater Stage" : "Switch to Meet Grid"}
-            aria-label="Toggle Layout"
-          >
-            {layoutMode === 'grid' ? (
-              <Tv className="w-4 h-4 text-[#8ab4f8]" />
-            ) : (
-              <LayoutGrid className="w-4 h-4 text-[#e8eaed]" />
+          {/* Layout Menu Trigger */}
+          <div className="relative">
+            <button
+              onClick={() => setShowLayoutMenu(prev => !prev)}
+              className="w-9 h-9 rounded-full flex items-center justify-center text-[#e8eaed] hover:bg-[#3c4043]/60 active:scale-95 transition-all"
+              title="Change Layout"
+              aria-label="Change Layout"
+            >
+              {layoutChoice === 'auto' ? (
+                <Sparkles className="w-4 h-4 text-[#8ab4f8]" />
+              ) : layoutChoice === 'tiled' ? (
+                <LayoutGrid className="w-4 h-4 text-[#8ab4f8]" />
+              ) : layoutChoice === 'spotlight' ? (
+                <Maximize2 className="w-4 h-4 text-[#8ab4f8]" />
+              ) : (
+                <Columns className="w-4 h-4 text-[#8ab4f8]" />
+              )}
+            </button>
+
+            {/* Layout Switcher Dropdown Menu */}
+            {showLayoutMenu && (
+              <div className="absolute right-0 top-full mt-2 w-48 bg-[#282a2d] border border-[#3c4043] rounded-xl shadow-2xl py-1.5 z-50 text-xs font-medium text-[#e8eaed] animate-fade-in">
+                <div className="px-3 py-1 text-[10px] uppercase font-bold text-[#9aa0a6] border-b border-[#3c4043]/60">
+                  Select Layout
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSelectLayoutMode('auto')}
+                  className="w-full px-3 py-2 flex items-center justify-between hover:bg-[#3c4043]/70 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-[#8ab4f8]" />
+                    <span>Auto</span>
+                  </div>
+                  {layoutChoice === 'auto' && <Check className="w-3.5 h-3.5 text-[#34a853]" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectLayoutMode('tiled')}
+                  className="w-full px-3 py-2 flex items-center justify-between hover:bg-[#3c4043]/70 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <LayoutGrid className="w-4 h-4 text-white" />
+                    <span>Tiled</span>
+                  </div>
+                  {layoutChoice === 'tiled' && <Check className="w-3.5 h-3.5 text-[#34a853]" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectLayoutMode('spotlight')}
+                  className="w-full px-3 py-2 flex items-center justify-between hover:bg-[#3c4043]/70 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <Maximize2 className="w-4 h-4 text-white" />
+                    <span>Spotlight</span>
+                  </div>
+                  {layoutChoice === 'spotlight' && <Check className="w-3.5 h-3.5 text-[#34a853]" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectLayoutMode('sidebar')}
+                  className="w-full px-3 py-2 flex items-center justify-between hover:bg-[#3c4043]/70 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <Columns className="w-4 h-4 text-white" />
+                    <span>Sidebar</span>
+                  </div>
+                  {layoutChoice === 'sidebar' && <Check className="w-3.5 h-3.5 text-[#34a853]" />}
+                </button>
+              </div>
             )}
-          </button>
+          </div>
         </div>
       </div>
 
       {/* 2. MAIN CALL STAGE & OPTIONAL SLIDE-OVER PANELS */}
       <div className="flex-1 min-h-0 flex overflow-hidden relative">
         
-        {/* CENTER VIDEO STAGE */}
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-          
-          {/* A. SCREEN SHARE ACTIVE STAGE */}
-          {isScreenSharing && screenShareStream ? (
-            <div className="flex-1 min-h-0 flex flex-col lg:flex-row p-2 gap-2 bg-[#121212]">
-              <div className="flex-1 min-h-0 rounded-2xl overflow-hidden bg-black border border-[#3c4043] shadow-2xl relative flex items-center justify-center">
-                <video
-                  ref={(el) => {
-                    if (el && el.srcObject !== screenShareStream) {
-                      el.srcObject = screenShareStream;
-                      el.play().catch(() => {});
-                    }
-                  }}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-contain"
-                />
-                <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-md px-3 py-1 rounded-full text-xs text-[#8ab4f8] font-bold border border-[#8ab4f8]/30 flex items-center gap-1.5">
-                  <ScreenShare className="w-3.5 h-3.5" />
-                  <span>You are presenting to everyone</span>
-                </div>
-              </div>
+        {/* CENTER VIDEO STAGE CONTAINER */}
+        <div
+          ref={gridContainerRef}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+          className="flex-1 min-h-0 relative overflow-hidden bg-[#121212] mb-16 sm:mb-20"
+        >
+          {/* A. COMPUTED PARTICIPANT TILES (Keeps DOM identity across layouts: transforms smoothly) */}
+          {layoutResult.tiles.map(tile => {
+            // Stage is rendered via the persistent stage wrapper at the fixed JSX position
+            if (tile.id === 'stage') return null;
 
-              {/* Side Participant Strip */}
-              <div className="w-full lg:w-72 flex-shrink-0 flex flex-row lg:flex-col gap-2 overflow-x-auto lg:overflow-y-auto no-scrollbar">
-                {remoteParticipants.map(peer => (
-                  <div key={peer.peerId} className="w-44 lg:w-full aspect-video min-h-[110px] flex-shrink-0">
-                    <VideoTile
-                      isLocal={false}
-                      peerId={peer.peerId}
-                      userName={peer.userName}
-                      avatarColor={peer.avatarColor}
-                      stream={peer.stream}
-                      isMuted={peer.isMuted}
-                      isCameraOff={peer.isCameraOff}
-                      isSpeaking={peer.isSpeaking}
-                      connectionQuality={peer.connectionQuality}
+            const isScreen = tile.kind === 'screen';
+            const participant = isScreen
+              ? null
+              : (participantsList.find(p => p.id === tile.id) || (tile.id === currentUserId ? {
+                  id: currentUserId,
+                  name: currentUser?.name || 'You',
+                  isLocal: true,
+                  audioEnabled: isMicOn,
+                  videoEnabled: isCameraOn,
+                  stream: localStream
+                } : null));
+
+            const isPinned = pinnedPeerId === tile.id;
+
+            return (
+              <div
+                key={tile.id}
+                className="absolute top-0 left-0 transition-[transform,width,height] duration-200 ease-out motion-reduce:transition-none"
+                style={{
+                  transform: `translate3d(${tile.x}px, ${tile.y}px, 0)`,
+                  width: `${tile.width}px`,
+                  height: `${tile.height}px`
+                }}
+              >
+                {isScreen && screenShareStream ? (
+                  /* Screen Share Video Feed */
+                  <div className="w-full h-full rounded-[8px] overflow-hidden bg-black border border-[#3c4043] relative flex items-center justify-center">
+                    <video
+                      ref={(el) => {
+                        if (el && el.srcObject !== screenShareStream) {
+                          el.srcObject = screenShareStream;
+                          el.play().catch(() => {});
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-full object-contain"
                     />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : pinnedParticipant ? (
-            /* B. SPOTLIGHT / PINNED PARTICIPANT VIEW */
-            <div className="flex-1 min-h-0 flex flex-col lg:flex-row p-2 gap-2 bg-[#121212]">
-              <div className="flex-1 min-h-0 rounded-2xl overflow-hidden bg-[#202124] border border-[#3c4043] shadow-2xl relative">
-                <VideoTile
-                  isLocal={pinnedParticipant.isLocal}
-                  peerId={pinnedPeerId}
-                  userName={pinnedParticipant.userName}
-                  avatarColor={pinnedParticipant.avatarColor}
-                  stream={pinnedParticipant.stream}
-                  isMuted={pinnedParticipant.isMuted}
-                  isCameraOff={pinnedParticipant.isCameraOff}
-                  isSpeaking={pinnedParticipant.isSpeaking}
-                  isPinned={true}
-                  onTogglePin={() => setPinnedPeerId(null)}
-                  onFlipCamera={pinnedParticipant.isLocal ? handleFlipCamera : null}
-                />
-              </div>
-
-              {/* Remaining Participants Strip */}
-              <div className="w-full lg:w-72 flex-shrink-0 flex flex-row lg:flex-col gap-2 overflow-x-auto lg:overflow-y-auto no-scrollbar">
-                {pinnedPeerId !== currentUserId && (
-                  <div className="w-44 lg:w-full aspect-video min-h-[110px] flex-shrink-0">
-                    <VideoTile
-                      isLocal={true}
-                      peerId={currentUserId}
-                      userName={currentUser?.name || 'You'}
-                      avatarColor={currentUser?.avatarColor || '#5865f2'}
-                      stream={localStream}
-                      isMuted={!isMicOn}
-                      isCameraOff={!isCameraOn}
-                      isSpeaking={isLocalSpeaking}
-                      facingMode={facingMode}
-                      onFlipCamera={handleFlipCamera}
-                    />
-                  </div>
-                )}
-                {remoteParticipants.filter(p => p.peerId !== pinnedPeerId).map(peer => (
-                  <div key={peer.peerId} className="w-44 lg:w-full aspect-video min-h-[110px] flex-shrink-0">
-                    <VideoTile
-                      isLocal={false}
-                      peerId={peer.peerId}
-                      userName={peer.userName}
-                      avatarColor={peer.avatarColor}
-                      stream={peer.stream}
-                      isMuted={peer.isMuted}
-                      isCameraOff={peer.isCameraOff}
-                      isSpeaking={peer.isSpeaking}
-                      connectionQuality={peer.connectionQuality}
-                      onTogglePin={() => setPinnedPeerId(peer.peerId)}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : isTheaterMode ? (
-            /* C. THEATER STAGE: Side Participant Column Layout */
-            <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden bg-[#121212] p-2 gap-2">
-              {/* Spacer allowing persistent stream container to occupy the main theater stage */}
-              <div className="flex-1 min-h-0 w-full" />
-
-              {/* Side Participant Column */}
-              <div className="w-full lg:w-72 xl:w-80 flex-shrink-0 flex flex-col min-h-0 bg-[#1e1f22] rounded-2xl border border-[#3c4043]/40 overflow-hidden shadow-xl z-20">
-                <div className="h-8 px-3 bg-[#202124] border-b border-[#3c4043]/40 flex items-center justify-between flex-shrink-0">
-                  <span className="text-[11px] font-bold text-[#e8eaed] flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5 text-[#34a853]" />
-                    <span>Meeting ({totalCallCount})</span>
-                  </span>
-                  <span className="text-[10px] text-[#34a853] bg-[#34a853]/15 border border-[#34a853]/30 px-2 py-0.5 rounded-full font-bold">
-                    {activeEngine === 'livekit' ? 'LiveKit SFU' : 'Live'}
-                  </span>
-                </div>
-
-                <div className="flex-1 p-2 grid grid-cols-2 lg:grid-cols-1 gap-2 overflow-y-auto no-scrollbar">
-                  <div className="aspect-video min-h-[110px]">
-                    <VideoTile
-                      isLocal={true}
-                      peerId={currentUserId}
-                      userName={currentUser?.name || 'You'}
-                      avatarColor={currentUser?.avatarColor || '#5865f2'}
-                      stream={localStream}
-                      isMuted={!isMicOn}
-                      isCameraOff={!isCameraOn}
-                      isSpeaking={isLocalSpeaking}
-                      facingMode={facingMode}
-                      onTogglePin={() => setPinnedPeerId(currentUserId)}
-                      onFlipCamera={handleFlipCamera}
-                    />
-                  </div>
-
-                  {remoteParticipants.map(peer => (
-                    <div key={peer.peerId} className="aspect-video min-h-[110px]">
-                      <VideoTile
-                        isLocal={false}
-                        peerId={peer.peerId}
-                        userName={peer.userName}
-                        avatarColor={peer.avatarColor}
-                        stream={peer.stream}
-                        isMuted={peer.isMuted}
-                        isCameraOff={peer.isCameraOff}
-                        isSpeaking={peer.isSpeaking}
-                        connectionQuality={peer.connectionQuality}
-                        onTogglePin={() => setPinnedPeerId(peer.peerId)}
-                      />
+                    <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/80 backdrop-blur-md border border-[#8ab4f8]/40 text-[#8ab4f8] text-xs font-semibold shadow-md">
+                      <ScreenShare className="w-3.5 h-3.5" />
+                      <span>You are presenting</span>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
-            /* D. FULL GOOGLE MEET DYNAMIC GRID VIEW */
-            <div className="flex-1 min-h-0 flex flex-col p-3 overflow-hidden bg-[#121212] pb-24">
-              <div className={`flex-1 min-h-0 grid gap-2.5 sm:gap-3 place-items-stretch overflow-y-auto no-scrollbar ${
-                totalCallCount === 1
-                  ? 'grid-cols-1 max-w-2xl mx-auto w-full'
-                  : totalCallCount === 2
-                  ? 'grid-cols-1 sm:grid-cols-2 max-w-4xl mx-auto w-full'
-                  : totalCallCount <= 4
-                  ? 'grid-cols-2 max-w-5xl mx-auto w-full'
-                  : 'grid-cols-2 sm:grid-cols-3 max-w-6xl mx-auto w-full'
-              }`}>
-                {/* Local Tile */}
-                <div className="w-full h-full min-h-[160px] aspect-video">
-                  <VideoTile
-                    isLocal={true}
-                    peerId={currentUserId}
-                    userName={currentUser?.name || 'You'}
-                    avatarColor={currentUser?.avatarColor || '#5865f2'}
-                    stream={localStream}
-                    isMuted={!isMicOn}
-                    isCameraOff={!isCameraOn}
-                    isSpeaking={isLocalSpeaking}
-                    facingMode={facingMode}
-                    onTogglePin={() => setPinnedPeerId(currentUserId)}
-                    onFlipCamera={handleFlipCamera}
-                  />
-                </div>
-
-                {/* Remote Participant Tiles */}
-                {remoteParticipants.map(peer => (
-                  <div key={peer.peerId} className="w-full h-full min-h-[160px] aspect-video">
-                    <VideoTile
-                      isLocal={false}
-                      peerId={peer.peerId}
-                      userName={peer.userName}
-                      avatarColor={peer.avatarColor}
-                      stream={peer.stream}
-                      isMuted={peer.isMuted}
-                      isCameraOff={peer.isCameraOff}
-                      isSpeaking={peer.isSpeaking}
-                      connectionQuality={peer.connectionQuality}
-                      onTogglePin={() => setPinnedPeerId(peer.peerId)}
-                    />
                   </div>
-                ))}
+                ) : participant ? (
+                  /* Standard Camera Feed / Avatar Tile */
+                  <VideoTile
+                    participant={participant}
+                    isPinned={isPinned}
+                    facingMode={facingMode}
+                    onTogglePin={() => setPinnedPeerId(isPinned ? null : tile.id)}
+                    onFlipCamera={participant.isLocal ? handleFlipCamera : null}
+                  />
+                ) : null}
               </div>
+            );
+          })}
+
+          {/* B. 1:1 DRAGGABLE SELF-VIEW PICTURE-IN-PICTURE */}
+          {pipPlacement && (
+            <div
+              key="pip-self-view"
+              onPointerDown={handlePipPointerDown}
+              onPointerMove={handlePipPointerMove}
+              onPointerUp={handlePipPointerUp}
+              className="absolute top-0 left-0 z-30 touch-none cursor-grab active:cursor-grabbing transition-[transform,width,height] duration-200 ease-out motion-reduce:transition-none drop-shadow-2xl"
+              style={{
+                transform: `translate3d(${pipPlacement.x}px, ${pipPlacement.y}px, 0)`,
+                width: `${pipPlacement.width}px`,
+                height: `${pipPlacement.height}px`
+              }}
+            >
+              <VideoTile
+                isLocal={true}
+                peerId={currentUserId}
+                userName={currentUser?.name || 'You'}
+                avatarColor={currentUser?.avatarColor || '#5865f2'}
+                stream={localStream}
+                isMuted={!isMicOn}
+                isCameraOff={!isCameraOn}
+                isSpeaking={isLocalSpeaking}
+                facingMode={facingMode}
+                onFlipCamera={handleFlipCamera}
+              />
             </div>
           )}
 
-          {/* PERSISTENT STREAM CONTAINER: EXACT SAME JSX POSITION IN EVERY MODE */}
+          {/* C. PAGINATION CONTROLS (Dots + Previous / Next for desktop & mobile) */}
+          {layoutResult.pageCount > 1 && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-3 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/10 shadow-xl">
+              <button
+                type="button"
+                onClick={() => setPageIndex(p => Math.max(0, p - 1))}
+                disabled={pageIndex === 0}
+                className="w-6 h-6 rounded-full flex items-center justify-center text-white hover:bg-white/15 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                title="Previous Page"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center gap-1.5">
+                {Array.from({ length: layoutResult.pageCount }).map((_, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setPageIndex(idx)}
+                    className={`h-2 rounded-full transition-all duration-200 ${
+                      idx === pageIndex ? 'w-4 bg-white' : 'w-2 bg-white/35 hover:bg-white/60'
+                    }`}
+                    title={`Page ${idx + 1}`}
+                  />
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setPageIndex(p => Math.min(layoutResult.pageCount - 1, p + 1))}
+                disabled={pageIndex >= layoutResult.pageCount - 1}
+                className="w-6 h-6 rounded-full flex items-center justify-center text-white hover:bg-white/15 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                title="Next Page"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* HARD CONSTRAINT 1: PERSISTENT YOUTUBE STAGE RENDERED AT ONE FIXED JSX SPOT */}
+          {/* ========================================================================= */}
           <div
             className={
-              isTheaterMode
-                ? "absolute inset-2 bottom-2 right-2 lg:right-[300px] xl:right-[332px] flex items-center justify-center bg-black rounded-2xl overflow-hidden shadow-2xl border border-[#3c4043]/40 z-10 transition-all duration-300"
-                : "fixed bottom-20 right-4 z-40 w-[356px] min-h-[200px] max-w-[calc(100vw-2rem)] aspect-video rounded-xl overflow-hidden shadow-2xl border border-[#3c4043] bg-black transition-all duration-300"
+              !stageActive
+                ? "fixed -top-96 -left-96 w-[1px] h-[1px] opacity-0 overflow-hidden pointer-events-none"
+                : isStageMainContent && stageTile
+                ? "absolute top-0 left-0 transition-[transform,width,height] duration-200 ease-out motion-reduce:transition-none z-10"
+                : "fixed bottom-20 right-4 z-40 w-[356px] min-h-[200px] h-[200px] max-w-[calc(100vw-2rem)] aspect-video rounded-[8px] overflow-hidden shadow-2xl border border-[#3c4043] bg-black transition-all duration-200 motion-reduce:transition-none"
+            }
+            style={
+              isStageMainContent && stageTile
+                ? {
+                    transform: `translate3d(${stageTile.x}px, ${stageTile.y}px, 0)`,
+                    width: `${stageTile.width}px`,
+                    height: `${stageTile.height}px`
+                  }
+                : undefined
             }
           >
             {children}
 
-            {isTheaterMode && isAlone && (
-              <div className="absolute top-3 right-3 z-30 flex items-center gap-2 animate-fade-in">
-                <button
-                  onClick={shareInviteLink}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#f28b82] hover:bg-[#f6aea9] text-[#202124] text-xs font-bold shadow-xl active:scale-95 transition-all"
-                >
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span>Share invite</span>
-                </button>
-              </div>
-            )}
-
-            {!isTheaterMode && (
+            {/* Expand to Spotlight Theater Button when Docked */}
+            {stageActive && !isStageMainContent && (
               <button
+                type="button"
                 onClick={() => {
-                  setPinnedPeerId(null);
-                  if (layoutMode !== 'strip') onToggleLayoutMode?.();
+                  setPinnedPeerId('stage');
+                  handleSelectLayoutMode('spotlight');
                 }}
-                className="absolute top-1.5 left-1.5 z-30 bg-black/80 hover:bg-black/95 backdrop-blur-md px-2 py-0.5 rounded text-[10px] text-white font-semibold border border-white/20 transition-all flex items-center gap-1 shadow cursor-pointer active:scale-95"
-                title="Expand to Theater Stage"
+                className="absolute top-1.5 left-1.5 z-30 bg-black/80 hover:bg-black/95 backdrop-blur-md px-2.5 py-1 rounded-[6px] text-[10px] text-white font-semibold border border-white/20 transition-all flex items-center gap-1.5 shadow active:scale-95"
+                title="Expand to Spotlight Stage"
               >
                 <Tv className="w-3 h-3 text-[#5865f2]" />
-                <span>Theater</span>
+                <span>Spotlight</span>
               </button>
             )}
           </div>
 
-        </div>
-
-        {/* 3. IN-CALL CHAT PANEL (Slide-over) */}
-        {showInCallChat && (
-          <aside className="w-80 md:w-88 flex-shrink-0 bg-[#202124] border-l border-[#3c4043] flex flex-col z-30 animate-fade-in">
-            <div className="h-12 px-4 border-b border-[#3c4043] flex items-center justify-between flex-shrink-0">
-              <span className="text-xs font-bold text-white flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-[#8ab4f8]" />
-                <span>In-Call Messages</span>
-              </span>
-              <button
-                onClick={() => setShowInCallChat(false)}
-                className="p-1 rounded text-[#9aa0a6] hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="flex-1 p-3 overflow-y-auto space-y-3">
-              {inCallMessages.length === 0 ? (
-                <div className="text-center py-12 text-[#9aa0a6] text-xs">
-                  <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                  <p>Messages can only be seen by people in the call and are deleted when the call ends.</p>
-                </div>
-              ) : (
-                inCallMessages.map(msg => (
-                  <div key={msg.id} className="text-xs">
-                    <div className="flex items-baseline gap-1.5 mb-0.5">
-                      <span className="font-bold text-white">{msg.sender}</span>
-                      <span className="text-[10px] text-[#9aa0a6]">
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                    <p className="text-[#e8eaed] bg-[#303134] p-2.5 rounded-xl break-words">
-                      {msg.text}
-                    </p>
-                  </div>
-                ))
-              )}
-              <div ref={chatBottomRef} />
-            </div>
-
-            <form onSubmit={handleSendMessage} className="p-3 border-t border-[#3c4043] flex gap-2">
-              <input
-                type="text"
-                placeholder="Send a message to everyone..."
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                className="flex-1 bg-[#303134] border border-[#5f6368] rounded-full px-3.5 py-2 text-xs text-white placeholder-[#9aa0a6] focus:outline-none focus:border-[#8ab4f8]"
-              />
-              <button
-                type="submit"
-                disabled={!chatInput.trim()}
-                className="w-8 h-8 rounded-full bg-[#8ab4f8] text-[#202124] flex items-center justify-center disabled:opacity-40 transition-all flex-shrink-0"
-              >
-                <Send className="w-3.5 h-3.5" />
-              </button>
-            </form>
-          </aside>
-        )}
-
-        {/* 4. PARTICIPANTS LIST PANEL (Slide-over) */}
-        {showParticipantsList && (
-          <aside className="w-80 md:w-88 flex-shrink-0 bg-[#202124] border-l border-[#3c4043] flex flex-col z-30 animate-fade-in">
-            <div className="h-12 px-4 border-b border-[#3c4043] flex items-center justify-between flex-shrink-0">
-              <span className="text-xs font-bold text-white flex items-center gap-2">
-                <Users className="w-4 h-4 text-[#8ab4f8]" />
-                <span>People ({totalCallCount})</span>
-              </span>
-              <button
-                onClick={() => setShowParticipantsList(false)}
-                className="p-1 rounded text-[#9aa0a6] hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="flex-1 p-3 overflow-y-auto space-y-2">
-              {/* Local User */}
-              <div className="flex items-center justify-between p-2.5 rounded-xl bg-[#303134]/60 border border-[#3c4043]">
-                <div className="flex items-center gap-2.5">
-                  <div
-                    className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs text-white"
-                    style={{ backgroundColor: currentUser?.avatarColor || '#5865f2' }}
-                  >
-                    {currentUser?.name?.charAt(0).toUpperCase() || 'Y'}
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold text-white block">{currentUser?.name || 'You'} (You)</span>
-                    <span className="text-[10px] text-[#9aa0a6]">{currentUser?.isHost ? 'Meeting Host' : 'Participant'}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className={`w-2 h-2 rounded-full ${isMicOn ? 'bg-[#34a853]' : 'bg-[#ea4335]'}`} />
-                </div>
-              </div>
-
-              {/* Remote Participants */}
-              {remoteParticipants.map(peer => (
-                <div key={peer.peerId} className="flex items-center justify-between p-2.5 rounded-xl bg-[#303134]/40 border border-[#3c4043]/60">
-                  <div className="flex items-center gap-2.5">
-                    <div
-                      className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs text-white"
-                      style={{ backgroundColor: peer.avatarColor || '#5865f2' }}
-                    >
-                      {peer.userName?.charAt(0).toUpperCase() || 'M'}
-                    </div>
-                    <div>
-                      <span className="text-xs font-bold text-white block">{peer.userName}</span>
-                      <span className="text-[10px] text-[#9aa0a6]">{peer.isSpeaking ? 'Speaking...' : 'Participant'}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className={`w-2 h-2 rounded-full ${!peer.isMuted ? 'bg-[#34a853]' : 'bg-[#ea4335]'}`} />
-                  </div>
+          {/* FLOATING EMOJI REACTIONS OVERLAY */}
+          {floatingReactions.length > 0 && (
+            <div className="absolute inset-0 pointer-events-none overflow-hidden z-40">
+              {floatingReactions.map((r) => (
+                <div
+                  key={r.id}
+                  className="absolute bottom-20 animate-float-reaction flex flex-col items-center pointer-events-none select-none"
+                  style={{ left: `${r.left}%` }}
+                >
+                  <span className="text-3xl sm:text-4xl drop-shadow-lg">{r.emoji}</span>
+                  {r.sender && (
+                    <span className="text-[10px] bg-black/60 text-white font-medium px-1.5 py-0.5 rounded-full mt-1 backdrop-blur-sm truncate max-w-[100px]">
+                      {r.sender}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
-          </aside>
-        )}
+          )}
+
+        </div>
+
+        {/* 3. UNIFIED MEETING SIDE PANEL (Desktop 360px pushing stage / Mobile Bottom Sheet) */}
+        <MeetingSidePanel
+          panel={activeSidePanel}
+          onClose={() => setActiveSidePanel(null)}
+          room={room}
+          currentUser={currentUser}
+          isHost={isHost}
+          participants={participantsList}
+          pinnedPeerId={pinnedPeerId}
+          onPinParticipant={setPinnedPeerId}
+          onMuteParticipant={handleMuteParticipant}
+          onMuteAll={handleMuteAll}
+          onLowerHand={handleLowerHand}
+          onAskToUnmute={handleAskToUnmute}
+          onSpotlight={handleSpotlight}
+          messages={inCallMessages}
+          onSendMessage={(text) => socket.emit('chat:message', { text })}
+          currentTrack={room?.currentTrack}
+          isPlaying={Boolean(room?.isPlaying)}
+        />
 
       </div>
 
-      {/* 5. GOOGLE MEET FLOATING CALL CONTROLS DOCK */}
+      {/* 4. GOOGLE MEET CALL CONTROLS */}
       <CallControls
+        room={room}
         isMicOn={isMicOn}
         isCameraOn={isCameraOn}
+        micState={micState}
+        cameraState={cameraState}
         isScreenSharing={isScreenSharing}
-        layoutMode={layoutMode}
+        isHandRaised={isHandRaised}
+        layoutMode={layoutChoice}
         isFullscreen={isFullscreen}
         unreadCount={inCallMessages.length}
         participantCount={totalCallCount}
+        isPeopleOpen={activeSidePanel === 'people'}
+        isChatOpen={activeSidePanel === 'chat'}
+        isDetailsOpen={activeSidePanel === 'details'}
         onToggleMic={handleToggleMic}
         onToggleCamera={handleToggleCamera}
         onFlipCamera={handleFlipCamera}
         onToggleScreenShare={handleToggleScreenShare}
-        onToggleLayoutMode={onToggleLayoutMode}
+        onToggleHandRaise={handleToggleHandRaise}
+        onSendReaction={handleSendReaction}
+        onSelectLayoutMode={handleSelectLayoutMode}
         onToggleFullscreen={toggleFullscreen}
         onOpenSettings={() => setShowSettings(true)}
-        onToggleChat={() => {
-          setShowInCallChat(prev => !prev);
-          setShowParticipantsList(false);
-        }}
-        onToggleParticipants={() => {
-          setShowParticipantsList(prev => !prev);
-          setShowInCallChat(false);
-        }}
+        onToggleChat={() => setActiveSidePanel(p => p === 'chat' ? null : 'chat')}
+        onToggleParticipants={() => setActiveSidePanel(p => p === 'people' ? null : 'people')}
+        onToggleDetails={() => setActiveSidePanel(p => p === 'details' ? null : 'details')}
         onLeaveCall={onLeaveRoom}
+        onToast={addToast}
       />
+
+      {/* 5. TOAST NOTIFICATIONS */}
+      <MeetingToasts toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

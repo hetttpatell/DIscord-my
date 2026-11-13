@@ -12,7 +12,8 @@ import {
   Play,
   Info
 } from 'lucide-react';
-import mediaService from '../services/mediaService';
+import mediaService from '../services/mediaService.js';
+import mediaController from '../services/mediaController.js';
 
 export default function MeetingSettingsModal({
   isOpen,
@@ -23,51 +24,84 @@ export default function MeetingSettingsModal({
   isSecureContext = true
 }) {
   const [activeTab, setActiveTab] = useState('audio'); // 'audio' | 'video' | 'general'
-  const [devices, setDevices] = useState({ audioInputs: [], videoInputs: [] });
-  const [selectedMic, setSelectedMic] = useState(mediaService.selectedMicId || '');
-  const [selectedCamera, setSelectedCamera] = useState(mediaService.selectedCameraId || '');
+  const [devices, setDevices] = useState({ audioInputs: [], videoInputs: [], audioOutputs: [] });
+  const [selectedMic, setSelectedMic] = useState(() => mediaController.getState().selectedMicId || '');
+  const [selectedCamera, setSelectedCamera] = useState(() => mediaController.getState().selectedCameraId || '');
+  const [selectedSpeaker, setSelectedSpeaker] = useState(() => mediaController.getState().selectedSpeakerId || '');
   const [testAudioPlaying, setTestAudioPlaying] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [nameInput, setNameInput] = useState(currentUser?.name || '');
 
   const previewVideoRef = useRef(null);
+  const supportsSinkId = typeof HTMLAudioElement !== 'undefined' && 'setSinkId' in HTMLAudioElement.prototype;
 
   useEffect(() => {
     if (!isOpen) return;
 
     mediaService.enumerateDevices().then(devs => {
       setDevices(devs);
-      if (devs.audioInputs.length > 0 && !selectedMic) {
+      const state = mediaController.getState();
+      if (devs.audioInputs.length > 0 && !state.selectedMicId) {
         setSelectedMic(devs.audioInputs[0].deviceId);
+      } else if (state.selectedMicId) {
+        setSelectedMic(state.selectedMicId);
       }
-      if (devs.videoInputs.length > 0 && !selectedCamera) {
+
+      if (devs.videoInputs.length > 0 && !state.selectedCameraId) {
         setSelectedCamera(devs.videoInputs[0].deviceId);
+      } else if (state.selectedCameraId) {
+        setSelectedCamera(state.selectedCameraId);
+      }
+
+      if (devs.audioOutputs?.length > 0 && !state.selectedSpeakerId) {
+        setSelectedSpeaker(devs.audioOutputs[0].deviceId);
+      } else if (state.selectedSpeakerId) {
+        setSelectedSpeaker(state.selectedSpeakerId);
       }
     });
 
-    const unsub = mediaService.subscribe((event, payload) => {
+    const unsub = mediaController.subscribe((event, payload, state) => {
       if (event === 'speaking') {
-        setIsSpeaking(Boolean(payload.isSpeaking));
+        setIsSpeaking(Boolean(payload?.isSpeaking));
+      } else if (event === 'stream-changed' || event === 'device-changed') {
+        const cur = state || mediaController.getState();
+        if (cur.selectedMicId) setSelectedMic(cur.selectedMicId);
+        if (cur.selectedCameraId) setSelectedCamera(cur.selectedCameraId);
+        if (cur.selectedSpeakerId) setSelectedSpeaker(cur.selectedSpeakerId);
+
+        if (previewVideoRef.current && cur.stream) {
+          previewVideoRef.current.srcObject = cur.stream;
+          previewVideoRef.current.play().catch(() => {});
+        }
       }
     });
 
     return () => unsub();
-  }, [isOpen, selectedMic, selectedCamera]);
+  }, [isOpen]);
 
   // Bind local preview in video tab
   useEffect(() => {
-    if (activeTab === 'video' && previewVideoRef.current && mediaService.localStream) {
-      previewVideoRef.current.srcObject = mediaService.localStream;
+    if (activeTab === 'video' && previewVideoRef.current && mediaController.stream) {
+      previewVideoRef.current.srcObject = mediaController.stream;
       previewVideoRef.current.play().catch(() => {});
     }
   }, [activeTab]);
 
   // Test speaker playback with Web Audio synth chime
-  const playSpeakerTestChime = () => {
+  const playSpeakerTestChime = async () => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) return;
       const ctx = new AudioCtx();
+
+      if (selectedSpeaker && typeof ctx.setSinkId === 'function') {
+        try {
+          await ctx.setSinkId(selectedSpeaker);
+        } catch {
+          // ignore setSinkId errors
+        }
+      }
+
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
 
@@ -87,7 +121,7 @@ export default function MeetingSettingsModal({
 
       setTimeout(() => {
         setTestAudioPlaying(false);
-        ctx.close();
+        ctx.close().catch(() => {});
       }, 500);
     } catch (e) {
       console.warn('Audio test chime error:', e);
@@ -97,15 +131,19 @@ export default function MeetingSettingsModal({
   const handleMicChange = async (e) => {
     const deviceId = e.target.value;
     setSelectedMic(deviceId);
-    mediaService.selectedMicId = deviceId;
-    await mediaService.acquireAudioTrack();
+    await mediaController.setAudioInput(deviceId);
   };
 
   const handleCameraChange = async (e) => {
     const deviceId = e.target.value;
     setSelectedCamera(deviceId);
-    mediaService.selectedCameraId = deviceId;
-    await mediaService.acquireVideoTrack();
+    await mediaController.setVideoInput(deviceId);
+  };
+
+  const handleSpeakerChange = (e) => {
+    const deviceId = e.target.value;
+    setSelectedSpeaker(deviceId);
+    mediaController.setAudioOutput(deviceId);
   };
 
   const handleSaveName = (e) => {
@@ -129,7 +167,7 @@ export default function MeetingSettingsModal({
           </div>
           <button
             onClick={onClose}
-            className="w-9 h-9 rounded-full flex items-center justify-center text-[#9aa0a6] hover:text-white hover:bg-[#3c4043]/60 transition-colors"
+            className="w-9 h-9 rounded-full flex items-center justify-center text-[#9aa0a6] hover:text-white hover:bg-[#3c4043]/60 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -139,7 +177,7 @@ export default function MeetingSettingsModal({
         <div className="grid grid-cols-3 p-1.5 bg-[#171717] border-b border-[#3c4043]/50 text-xs font-semibold">
           <button
             onClick={() => setActiveTab('audio')}
-            className={`py-2 rounded-xl flex items-center justify-center gap-2 transition-all ${
+            className={`py-2 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer ${
               activeTab === 'audio'
                 ? 'bg-[#3c4043] text-white shadow'
                 : 'text-[#9aa0a6] hover:text-white'
@@ -151,7 +189,7 @@ export default function MeetingSettingsModal({
 
           <button
             onClick={() => setActiveTab('video')}
-            className={`py-2 rounded-xl flex items-center justify-center gap-2 transition-all ${
+            className={`py-2 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer ${
               activeTab === 'video'
                 ? 'bg-[#3c4043] text-white shadow'
                 : 'text-[#9aa0a6] hover:text-white'
@@ -163,7 +201,7 @@ export default function MeetingSettingsModal({
 
           <button
             onClick={() => setActiveTab('general')}
-            className={`py-2 rounded-xl flex items-center justify-center gap-2 transition-all ${
+            className={`py-2 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer ${
               activeTab === 'general'
                 ? 'bg-[#3c4043] text-white shadow'
                 : 'text-[#9aa0a6] hover:text-white'
@@ -215,20 +253,44 @@ export default function MeetingSettingsModal({
                 </div>
               </div>
 
+              {/* Speaker Output Device (if supported) */}
+              {supportsSinkId && devices.audioOutputs && devices.audioOutputs.length > 0 && (
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1.5">
+                    Audio Output Destination (Speakers / Headphones)
+                  </label>
+                  <select
+                    value={selectedSpeaker}
+                    onChange={handleSpeakerChange}
+                    className="w-full bg-[#303134] border border-[#5f6368] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#8ab4f8]"
+                  >
+                    {devices.audioOutputs.map((d, i) => (
+                      <option key={d.deviceId || i} value={d.deviceId}>
+                        {d.label || `Speaker ${i + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* Speaker Test */}
               <div className="pt-2">
                 <label className="text-xs font-bold text-white block mb-1.5">
-                  Speakers &amp; Audio Output
+                  Speakers &amp; Audio Output Check
                 </label>
                 <div className="flex items-center justify-between p-3 rounded-xl bg-[#303134]/50 border border-[#3c4043]">
                   <div className="flex items-center gap-2 text-xs text-[#9aa0a6]">
                     <Volume2 className="w-4 h-4 text-white" />
-                    <span>Default System Output</span>
+                    <span>
+                      {selectedSpeaker
+                        ? devices.audioOutputs?.find(d => d.deviceId === selectedSpeaker)?.label || 'Selected Audio Output'
+                        : 'Default System Output'}
+                    </span>
                   </div>
                   <button
                     onClick={playSpeakerTestChime}
                     disabled={testAudioPlaying}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#3c4043] hover:bg-[#4a4e52] text-xs font-bold text-white transition-all active:scale-95"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#3c4043] hover:bg-[#4a4e52] text-xs font-bold text-white transition-all active:scale-95 cursor-pointer"
                   >
                     <Play className="w-3.5 h-3.5 text-[#8ab4f8]" />
                     <span>{testAudioPlaying ? 'Playing...' : 'Test Speakers'}</span>
@@ -281,8 +343,8 @@ export default function MeetingSettingsModal({
                     className="w-full h-full object-cover scale-x-[-1]"
                   />
                   <button
-                    onClick={() => mediaService.switchCamera()}
-                    className="absolute bottom-2 right-2 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-md text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-black/90 active:scale-95 shadow"
+                    onClick={() => mediaController.switchCamera()}
+                    className="absolute bottom-2 right-2 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-md text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-black/90 active:scale-95 shadow cursor-pointer"
                   >
                     <SwitchCamera className="w-3.5 h-3.5" />
                     <span>Flip Camera</span>
@@ -309,7 +371,7 @@ export default function MeetingSettingsModal({
                   />
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#202124] font-bold text-xs rounded-xl transition-all"
+                    className="px-4 py-2 bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#202124] font-bold text-xs rounded-xl transition-all cursor-pointer"
                   >
                     Save
                   </button>
@@ -354,7 +416,7 @@ export default function MeetingSettingsModal({
         <div className="h-14 px-6 border-t border-[#3c4043] flex items-center justify-end bg-[#171717] flex-shrink-0">
           <button
             onClick={onClose}
-            className="px-5 py-2 rounded-full bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#202124] font-bold text-xs shadow transition-all active:scale-95"
+            className="px-5 py-2 rounded-full bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#202124] font-bold text-xs shadow transition-all active:scale-95 cursor-pointer"
           >
             Done
           </button>
@@ -364,4 +426,3 @@ export default function MeetingSettingsModal({
     </div>
   );
 }
-

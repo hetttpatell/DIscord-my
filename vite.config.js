@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -10,7 +11,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
-      tailwindcss()
+      tailwindcss(),
+      basicSsl()
     ],
     define: {
       'import.meta.env.BACKEND_URL': JSON.stringify(backendUrl),
@@ -18,6 +20,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5173,
+      host: true,
       proxy: {
         '/socket.io': {
           target: 'http://localhost:3001',

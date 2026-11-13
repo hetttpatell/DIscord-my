@@ -3,6 +3,7 @@ import Navbar from './components/Navbar';
 import CommonScreen from './components/CommonScreen';
 import JoinCreateModal from './components/JoinCreateModal';
 import socket, { getBackendUrl } from './services/socket';
+import { getClientId } from './services/clientId';
 import { Radio } from 'lucide-react';
 
 function getSessionId() {
@@ -58,21 +59,23 @@ export default function App() {
       setInitialRoomId(roomParam.toUpperCase());
     }
 
-    // Auto-resume active session after browser refresh
+    // Auto-resume active session after browser refresh or server restart
     const savedSessionRaw = localStorage.getItem('togetherTune_activeSession');
     if (savedSessionRaw) {
       try {
         const savedSession = JSON.parse(savedSessionRaw);
-        const mySessionId = savedSession.sessionId || getSessionId();
+        const myClientId = savedSession.clientId || getClientId();
 
         if (savedSession.roomId) {
           socket.emit('room:resume', {
             roomId: savedSession.roomId,
-            sessionId: mySessionId,
-            userName: savedSession.userName
+            clientId: myClientId,
+            sessionId: myClientId,
+            userName: savedSession.userName,
+            resumeToken: savedSession.resumeToken
           }, (response) => {
             if (response && response.success) {
-              handleRoomJoined(response.room, response.user);
+              handleRoomJoined(response.room, response.user, response.resumeToken || savedSession.resumeToken);
             } else {
               localStorage.removeItem('togetherTune_activeSession');
             }
@@ -207,15 +210,21 @@ export default function App() {
       if (savedSessionRaw) {
         try {
           const savedSession = JSON.parse(savedSessionRaw);
-          const mySessionId = savedSession.sessionId || getSessionId();
+          const myClientId = savedSession.clientId || getClientId();
           if (savedSession.roomId) {
             socket.emit('room:resume', {
               roomId: savedSession.roomId,
-              sessionId: mySessionId,
-              userName: savedSession.userName
+              clientId: myClientId,
+              sessionId: myClientId,
+              userName: savedSession.userName,
+              resumeToken: savedSession.resumeToken
             }, (response) => {
               if (response && response.success) {
-                handleRoomJoined(response.room, response.user);
+                handleRoomJoined(response.room, response.user, response.resumeToken || savedSession.resumeToken);
+              } else {
+                localStorage.removeItem('togetherTune_activeSession');
+                setRoom(null);
+                setCurrentUser(null);
               }
             });
           }
@@ -240,7 +249,7 @@ export default function App() {
     };
   }, []);
 
-  const handleRoomJoined = (roomData, userData) => {
+  const handleRoomJoined = (roomData, userData, resumeToken = null) => {
     setRoom(roomData);
     setCurrentUser(userData);
     setCurrentTrack(roomData.currentTrack || null);
@@ -251,13 +260,24 @@ export default function App() {
     setQueue(roomData.queue || []);
     setChatMessages(roomData.chatMessages || []);
 
-    // Save active session in localStorage so page refresh never kicks you out of your room!
-    const mySessionId = userData.sessionId || getSessionId();
+    // Save active session with stable clientId and server-issued resumeToken (never store raw password)
+    const myClientId = getClientId();
+    let storedToken = resumeToken;
+    if (!storedToken) {
+      try {
+        const prev = JSON.parse(localStorage.getItem('togetherTune_activeSession') || '{}');
+        if (prev.roomId === roomData.id && prev.resumeToken) {
+          storedToken = prev.resumeToken;
+        }
+      } catch {}
+    }
+
     localStorage.setItem('togetherTune_activeSession', JSON.stringify({
       roomId: roomData.id,
-      sessionId: mySessionId,
+      clientId: myClientId,
       userName: userData.name,
-      isHost: Boolean(userData.isHost)
+      isHost: Boolean(userData.isHost),
+      resumeToken: storedToken || null
     }));
 
     const newUrl = `${window.location.pathname}?room=${roomData.id}`;

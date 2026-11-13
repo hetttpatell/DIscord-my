@@ -1,15 +1,22 @@
 import { io } from 'socket.io-client';
 
-// Determine backend URL from BACKEND_URL, VITE_BACKEND_URL, or default localhost:3001
+// Determine backend URL from VITE_BACKEND_URL or current origin (proxied in dev, direct in prod)
 export function getBackendUrl() {
-  const envUrl = import.meta.env.BACKEND_URL || import.meta.env.VITE_BACKEND_URL;
+  // In dev, connect same-origin through Vite's HTTPS dev proxy to eliminate mixed-content errors
+  if (import.meta.env.DEV) {
+    if (typeof window !== 'undefined') {
+      return window.location.origin;
+    }
+  }
+
+  const envUrl = import.meta.env.VITE_BACKEND_URL;
   if (envUrl && envUrl.trim() !== '') {
     return envUrl.trim().replace(/\/$/, '');
   }
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    return 'http://localhost:3001';
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
   }
-  return window.location.origin;
+  return 'http://localhost:3001';
 }
 
 export const BACKEND_URL = getBackendUrl();

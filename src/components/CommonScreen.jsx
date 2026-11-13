@@ -40,6 +40,7 @@ import {
 } from 'lucide-react';
 import YouTubePlayer from './YouTubePlayer';
 import VideoCallGrid from './VideoCallGrid';
+import RemoteAudioLayer from './RemoteAudioLayer';
 import { 
   searchYouTube, 
   extractYouTubeId, 
@@ -48,6 +49,7 @@ import {
   CURATED_TRACKS 
 } from '../services/youtube';
 import socket from '../services/socket';
+import mediaService from '../services/mediaService';
 
 const QUICK_REACTIONS = ['🔥', '❤️', '🎧', '🕺', '👏', '🚀', '✨', '😂'];
 
@@ -106,9 +108,17 @@ export default function CommonScreen({
   // UI helpers
   const [copiedId, setCopiedId] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isMicOn, setIsMicOn] = useState(mediaService.isMicOn);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
   const searchInputRef = useRef(null);
+
+  useEffect(() => {
+    return mediaService.subscribe((event, payload, state) => {
+      if (event === 'state-changed') {
+        setIsMicOn(state.isMicOn);
+      }
+    });
+  }, []);
 
   // Edit Room Name & User Nickname independently
   const [isEditingRoomName, setIsEditingRoomName] = useState(false);
@@ -201,7 +211,7 @@ export default function CommonScreen({
   };
 
   const handleSkipTrack = () => {
-    socket.emit('player:skip');
+    socket.emit('player:skip', { entryId: currentTrack?.entryId });
   };
 
   // Search or Direct URL submit
@@ -1100,11 +1110,11 @@ export default function CommonScreen({
 
             <div className="flex items-center gap-1 text-[#b5bac1]">
               <button
-                onClick={() => setIsMicMuted(!isMicMuted)}
-                className={`p-1.5 rounded hover:bg-[#35373c] transition-colors ${isMicMuted ? 'text-[#f23f43]' : 'hover:text-[#dbdee1]'}`}
-                title={isMicMuted ? 'Unmute Mic' : 'Mute Mic'}
+                onClick={() => mediaService.toggleMic()}
+                className={`p-1.5 rounded hover:bg-[#35373c] transition-colors ${!isMicOn ? 'text-[#f23f43]' : 'text-[#23a55a] hover:text-[#dbdee1]'}`}
+                title={isMicOn ? 'Mute Mic' : 'Unmute Mic'}
               >
-                {isMicMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                {!isMicOn ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
               </button>
 
               <button
@@ -1157,6 +1167,9 @@ export default function CommonScreen({
             </div>
           </div>
 
+          {/* Persistent Remote Audio Layer (Mounted at app level outside VideoCallGrid) */}
+          <RemoteAudioLayer />
+
           {/* WEBRTC REAL-TIME VOICE & VIDEO CALL BAR + STAGE (Google Meet & Theater style) */}
           <VideoCallGrid
             room={room}
@@ -1169,34 +1182,32 @@ export default function CommonScreen({
             {/* 16:9 Stream Container - Full width on mobile, rounded card on desktop */}
             <div className="relative w-full max-w-[1280px] max-h-full aspect-video bg-black rounded-none sm:rounded-xl overflow-hidden shadow-2xl border-y sm:border border-[#383a40] flex items-center justify-center">
               
-              {currentTrack ? (
-                <>
-                  <YouTubePlayer
-                    currentTrack={currentTrack}
-                    isPlaying={isPlaying}
-                    playbackPosition={playbackPosition}
-                    volume={volume}
-                    isMuted={isMuted}
-                    onDurationChange={setDuration}
-                    onCurrentTimeChange={setCurrentTime}
-                    djMode={false}
-                    isHost={isHost}
-                    showVideo={true}
-                  />
+              {/* Permanent YouTube player wrapper: always mounted to prevent iframe teardown */}
+              <div className={`w-full h-full flex items-center justify-center ${!currentTrack ? 'w-[1px] h-[1px] opacity-0 overflow-hidden pointer-events-none absolute' : ''}`}>
+                <YouTubePlayer
+                  currentTrack={currentTrack}
+                  isPlaying={isPlaying}
+                  playbackPosition={playbackPosition}
+                  volume={volume}
+                  isMuted={isMuted}
+                  onDurationChange={setDuration}
+                  onCurrentTimeChange={setCurrentTime}
+                  djMode={false}
+                  isHost={isHost}
+                  showVideo={Boolean(currentTrack)}
+                />
+              </div>
 
-                  {/* Theater Screen Status Overlay (Display only, non-interactive) */}
-                  <div className="absolute inset-0 z-20 pointer-events-none select-none">
-                    {/* Synchronized Theater Status Badge when Paused */}
-                    {!isPlaying && (
-                      <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-md px-3 py-1 rounded-full border border-white/15 flex items-center gap-1.5 text-xs font-bold text-white shadow-xl animate-fade-in">
-                        <Pause className="w-3 h-3 text-[#f0b232] fill-current" />
-                        <span>Theater Paused</span>
-                      </div>
-                    )}
-                  </div>
-                </>
-              ) : (
-                /* Empty Stream Stage Placeholder */
+              {/* Theater Screen Status Overlay (Display only, non-interactive) */}
+              {currentTrack && !isPlaying && (
+                <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-md px-3 py-1 rounded-full border border-white/15 flex items-center gap-1.5 text-xs font-bold text-white shadow-xl animate-fade-in pointer-events-none select-none z-20">
+                  <Pause className="w-3 h-3 text-[#f0b232] fill-current" />
+                  <span>Theater Paused</span>
+                </div>
+              )}
+
+              {/* Empty Stream Stage Placeholder */}
+              {!currentTrack && (
                 <div className="w-full h-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#1e1f22] text-[#dbdee1]">
                   <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-2xl sm:rounded-3xl bg-[#5865f2]/20 border border-[#5865f2]/40 flex items-center justify-center text-[#5865f2] mb-2 sm:mb-3 shadow-lg">
                     <Music className="w-6 h-6 sm:w-8 sm:h-8" />

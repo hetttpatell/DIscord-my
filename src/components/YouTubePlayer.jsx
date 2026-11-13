@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import socket from '../services/socket';
+import peerConnectionService from '../services/peerConnectionService';
+import livekitService from '../services/livekitService';
 
 /**
  * Synchronized YouTube IFrame Player
@@ -28,6 +30,9 @@ export default function YouTubePlayer({
   // ALL state changes from the YT player are ignored — we never emit back to socket
   // from onStateChange because the controls in CommonScreen already do that.
   const isInternalUpdate = useRef(false);
+
+  // Guard ref to emit track-end or auto-skip at most once per entryId
+  const lastEndedEntryIdRef = useRef(null);
 
   // Track the last known props to detect real changes
   const lastSyncRef = useRef({ isPlaying: false, playbackPosition: 0, trackId: null });
@@ -109,7 +114,11 @@ export default function YouTubePlayer({
           // If video unavailable/restricted, notify and skip to next
           if (e.data === 150 || e.data === 101 || e.data === 100) {
             console.log('Restricted video, auto-skipping...');
-            socket.emit('player:skip');
+            const entryId = currentTrack?.entryId;
+            if (entryId && lastEndedEntryIdRef.current !== entryId) {
+              lastEndedEntryIdRef.current = entryId;
+              socket.emit('player:skip', { entryId });
+            }
           }
         }
       }
@@ -129,9 +138,13 @@ export default function YouTubePlayer({
       setAutoplayBlocked(false);
     }
 
-    // Detect track ended — notify server to advance queue
+    // Detect track ended — notify server to advance queue (at most once per entryId)
     if (playerState === window.YT.PlayerState.ENDED && !isInternalUpdate.current) {
-      socket.emit('player:track-end');
+      const entryId = currentTrack?.entryId;
+      if (entryId && lastEndedEntryIdRef.current !== entryId) {
+        lastEndedEntryIdRef.current = entryId;
+        socket.emit('player:track-end', { entryId });
+      }
       return;
     }
 
@@ -145,7 +158,7 @@ export default function YouTubePlayer({
         player.playVideo();
       }
     }
-  }, [isReady, isPlaying]);
+  }, [isReady, isPlaying, currentTrack?.entryId]);
 
   // Synchronize player with room state (called when props change from server socket)
   const syncPlayerState = useCallback((targetPlaying, targetPosition) => {
@@ -232,17 +245,72 @@ export default function YouTubePlayer({
     }
   }, [isPlaying, playbackPosition, isReady, syncPlayerState]);
 
-  // Volume & Mute updates
-  useEffect(() => {
+  // Audio ducking state & timers
+  const isDuckedRef = useRef(false);
+  const duckingReleaseTimeoutRef = useRef(null);
+
+  const applyPlayerVolume = useCallback((ducked = isDuckedRef.current) => {
     const player = playerRef.current;
     if (!player || !isReady || typeof player.setVolume !== 'function') return;
-    player.setVolume(volume);
+    const targetVolume = ducked ? Math.max(10, Math.round(volume * 0.25)) : volume;
+    player.setVolume(targetVolume);
     if (isMuted) {
       player.mute();
     } else {
       player.unMute();
     }
   }, [volume, isMuted, isReady]);
+
+  // Volume & Mute updates
+  useEffect(() => {
+    applyPlayerVolume();
+  }, [applyPlayerVolume]);
+
+  // Audio ducking when a remote participant speaks (skipped on iOS where setVolume has no effect)
+  useEffect(() => {
+    // Skip ducking on iOS where YouTube IFrame setVolume() has no effect due to OS-level volume control
+    const isIOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+    if (isIOS) return;
+
+    const checkSpeakingAndDuck = () => {
+      const player = playerRef.current;
+      if (!player || !isReady) return;
+
+      const allPeers = { ...peerConnectionService.getAllPeers(), ...livekitService.getAllPeers() };
+      const isRemoteSpeaking = Object.values(allPeers).some(p => Boolean(p.isSpeaking && !p.isMuted));
+
+      if (isRemoteSpeaking) {
+        if (duckingReleaseTimeoutRef.current) {
+          clearTimeout(duckingReleaseTimeoutRef.current);
+          duckingReleaseTimeoutRef.current = null;
+        }
+        if (!isDuckedRef.current) {
+          isDuckedRef.current = true;
+          applyPlayerVolume(true);
+        }
+      } else {
+        if (isDuckedRef.current && !duckingReleaseTimeoutRef.current) {
+          duckingReleaseTimeoutRef.current = setTimeout(() => {
+            isDuckedRef.current = false;
+            duckingReleaseTimeoutRef.current = null;
+            applyPlayerVolume(false);
+          }, 600);
+        }
+      }
+    };
+
+    const unsubWebRTC = peerConnectionService.subscribe(checkSpeakingAndDuck);
+    const unsubLiveKit = livekitService.subscribe(checkSpeakingAndDuck);
+
+    return () => {
+      if (duckingReleaseTimeoutRef.current) {
+        clearTimeout(duckingReleaseTimeoutRef.current);
+        duckingReleaseTimeoutRef.current = null;
+      }
+      unsubWebRTC();
+      unsubLiveKit();
+    };
+  }, [isReady, applyPlayerVolume]);
 
   // Periodic time updates & gentle drift check
   useEffect(() => {

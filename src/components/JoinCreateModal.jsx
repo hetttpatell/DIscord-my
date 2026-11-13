@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Radio, 
-  Users, 
   ArrowRight, 
   Loader2, 
   AlertCircle, 
   Clock, 
   CheckCircle2,
-  Shield
+  Mic
 } from 'lucide-react';
 import socket from '../services/socket';
+import { getClientId } from '../services/clientId';
+import mediaService from '../services/mediaService';
+import peerConnectionService from '../services/peerConnectionService';
+import livekitService from '../services/livekitService';
+import MeetingLobby from './MeetingLobby';
 
 function getSessionId() {
   let sid = sessionStorage.getItem('togetherTune_sessionId');
@@ -24,6 +27,7 @@ export default function JoinCreateModal({
   onRoomJoined,
   initialRoomId = ''
 }) {
+  const [useMeetLobby, setUseMeetLobby] = useState(Boolean(initialRoomId));
   const [mode, setMode] = useState(initialRoomId ? 'join' : 'create'); // 'create' | 'join'
   
   // Create Room fields
@@ -40,6 +44,80 @@ export default function JoinCreateModal({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
   const [waitingStatus, setWaitingStatus] = useState(false);
+
+  // Pre-join Audio & Microphone state
+  const [isMicReady, setIsMicReady] = useState(() => 
+    Boolean(mediaService.localStream?.getAudioTracks().some(t => t.readyState === 'live'))
+  );
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [micErrorMessage, setMicErrorMessage] = useState(null);
+
+  useEffect(() => {
+    if (mediaService.isMicOn && mediaService.localStream?.getAudioTracks().length > 0) {
+      setIsMicReady(true);
+    }
+
+    const unsubscribe = mediaService.subscribe((event, payload, state) => {
+      if (event === 'state-changed') {
+        setIsMicReady(state.isMicOn);
+      } else if (event === 'speaking') {
+        setIsSpeaking(Boolean(payload.isSpeaking));
+      } else if (event === 'error' && payload?.device === 'audio') {
+        setMicErrorMessage(payload.message);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  const handleLobbyJoin = ({ roomId, userName, password }) => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    const sessionId = getSessionId();
+    const clientId = getClientId();
+
+    peerConnectionService.unlockAudio();
+    livekitService.startAudio();
+
+    socket.emit('room:join', {
+      roomId,
+      password,
+      userName,
+      sessionId,
+      clientId
+    }, (response) => {
+      if (response && response.success) {
+        if (response.waiting) {
+          setWaitingStatus(true);
+          setIsLoading(false);
+          setUseMeetLobby(false);
+        } else {
+          setIsLoading(false);
+          onRoomJoined(response.room, response.user, response.resumeToken);
+        }
+      } else {
+        // If room does not exist, auto-create it with this room ID
+        socket.emit('room:create', {
+          roomId,
+          roomName: `${userName}'s Lounge`,
+          password,
+          userName,
+          sessionId,
+          clientId,
+          requireApproval: false
+        }, (createRes) => {
+          setIsLoading(false);
+          if (createRes && createRes.success) {
+            onRoomJoined(createRes.room, createRes.user, createRes.resumeToken);
+          } else {
+            setErrorMessage(response?.message || createRes?.message || 'Could not join or create room.');
+          }
+        });
+      }
+    });
+  };
 
   useEffect(() => {
     if (initialRoomId) {
@@ -70,21 +148,26 @@ export default function JoinCreateModal({
     };
   }, [onRoomJoined]);
 
-  const handleCreateRoom = (e) => {
+  const handleCreateRoom = async (e) => {
     e.preventDefault();
     setIsLoading(true);
     setErrorMessage(null);
 
-    // Pre-request microphone access on this direct user click gesture (prevents mobile browser warnings)
-    if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(s => s.getTracks().forEach(t => t.stop()))
-        .catch(() => {});
+    // Pre-request microphone access on this direct user click gesture (keeps stream alive for the call)
+    peerConnectionService.unlockAudio();
+    livekitService.startAudio();
+    if (!mediaService.isMicOn) {
+      try {
+        await mediaService.acquireAudioTrack();
+      } catch (err) {
+        console.debug('Microphone acquisition error:', err);
+      }
     }
 
     const generatedId = createRoomId.trim() || Math.random().toString(36).substring(2, 8).toUpperCase();
 
     const sessionId = getSessionId();
+    const clientId = getClientId();
 
     socket.emit('room:create', {
       roomId: generatedId,
@@ -92,18 +175,19 @@ export default function JoinCreateModal({
       password: createPassword.trim(),
       userName: createUserName.trim() || 'Host',
       sessionId,
+      clientId,
       requireApproval: true
     }, (response) => {
       setIsLoading(false);
       if (response.success) {
-        onRoomJoined(response.room, response.user);
+        onRoomJoined(response.room, response.user, response.resumeToken);
       } else {
         setErrorMessage(response.message || 'Failed to create room.');
       }
     });
   };
 
-  const handleJoinRoom = (e) => {
+  const handleJoinRoom = async (e) => {
     e.preventDefault();
     if (!joinRoomId.trim()) {
       setErrorMessage('Please enter a Room ID.');
@@ -113,20 +197,26 @@ export default function JoinCreateModal({
     setIsLoading(true);
     setErrorMessage(null);
 
-    // Pre-request microphone access on this direct user click gesture (prevents mobile browser warnings)
-    if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(s => s.getTracks().forEach(t => t.stop()))
-        .catch(() => {});
+    // Pre-request microphone access on this direct user click gesture (keeps stream alive for the call)
+    peerConnectionService.unlockAudio();
+    livekitService.startAudio();
+    if (!mediaService.isMicOn) {
+      try {
+        await mediaService.acquireAudioTrack();
+      } catch (err) {
+        console.debug('Microphone acquisition error:', err);
+      }
     }
 
     const sessionId = getSessionId();
+    const clientId = getClientId();
 
     socket.emit('room:join', {
       roomId: joinRoomId.trim(),
       password: joinPassword.trim(),
       userName: joinUserName.trim() || 'Guest',
-      sessionId
+      sessionId,
+      clientId
     }, (response) => {
       if (response.success) {
         if (response.waiting) {
@@ -134,7 +224,7 @@ export default function JoinCreateModal({
           setIsLoading(false);
         } else {
           setIsLoading(false);
-          onRoomJoined(response.room, response.user);
+          onRoomJoined(response.room, response.user, response.resumeToken);
         }
       } else {
         setIsLoading(false);
@@ -142,6 +232,18 @@ export default function JoinCreateModal({
       }
     });
   };
+
+  if (useMeetLobby) {
+    return (
+      <MeetingLobby
+        initialRoomId={initialRoomId || joinRoomId}
+        onJoin={handleLobbyJoin}
+        onSwitchToClassic={() => setUseMeetLobby(false)}
+        isLoading={isLoading}
+        errorMessage={errorMessage}
+      />
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-fade-in">
@@ -164,6 +266,14 @@ export default function JoinCreateModal({
           <p className="text-xs text-[#949ba4] mt-1">
             Discord-Style Real-Time Watch &amp; Listening Lounge
           </p>
+
+          <button
+            type="button"
+            onClick={() => setUseMeetLobby(true)}
+            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#8ab4f8]/10 hover:bg-[#8ab4f8]/20 border border-[#8ab4f8]/30 text-[#8ab4f8] text-xs font-bold transition-all shadow-sm"
+          >
+            <span>Switch to Google Meet-Style Lobby Preview</span>
+          </button>
         </div>
 
         {/* WAITING ROOM SCREEN */}
@@ -285,10 +395,60 @@ export default function JoinCreateModal({
                   </div>
                 </div>
 
+                {/* Starting Microphone & Audio Permission Setup */}
+                <div className="p-3 rounded-2xl bg-[#1e1f22] border border-[#383a40]">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                        isMicReady ? 'bg-[#23a55a]/20 text-[#23a55a]' : 'bg-[#5865f2]/20 text-[#5865f2]'
+                      }`}>
+                        <Mic className={`w-4 h-4 ${isSpeaking ? 'animate-bounce text-[#23a55a]' : ''}`} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-white">Microphone</span>
+                          {isMicReady && (
+                            <span className="text-[10px] bg-[#23a55a]/15 text-[#23a55a] font-bold px-1.5 py-0.2 rounded-full border border-[#23a55a]/30">
+                              Ready
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-[#949ba4] block leading-tight">
+                          {isMicReady
+                            ? (isSpeaking ? 'Voice detected! 🔊' : 'Connected & ready to talk')
+                            : 'Click to allow microphone access'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {!isMicReady ? (
+                      <button
+                        type="button"
+                        onClick={handleEnableMic}
+                        className="px-3 py-1.5 rounded-lg bg-[#5865f2] hover:bg-[#4752c4] text-white text-xs font-bold transition-all shadow-md active:scale-95 flex items-center gap-1.5 touch-manipulation cursor-pointer flex-shrink-0"
+                      >
+                        <Mic className="w-3.5 h-3.5" />
+                        <span>Allow Mic</span>
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-1 text-[#23a55a] text-xs font-semibold px-2 py-1 bg-[#23a55a]/10 rounded-lg border border-[#23a55a]/20">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span className="text-[11px]">Active</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {micErrorMessage && (
+                    <div className="mt-2 text-[11px] text-[#f23f43] bg-[#f23f43]/10 border border-[#f23f43]/20 p-2 rounded-lg leading-relaxed">
+                      {micErrorMessage}
+                    </div>
+                  )}
+                </div>
+
                 <button
                   type="submit"
                   disabled={isLoading || !createUserName.trim()}
-                  className="w-full mt-3 py-3 rounded-xl bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-50 text-white text-xs font-bold shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  className="w-full mt-3 py-3 rounded-xl bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-50 text-white text-xs font-bold shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer touch-manipulation"
                 >
                   {isLoading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -346,10 +506,60 @@ export default function JoinCreateModal({
                   />
                 </div>
 
+                {/* Starting Microphone & Audio Permission Setup */}
+                <div className="p-3 rounded-2xl bg-[#1e1f22] border border-[#383a40]">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                        isMicReady ? 'bg-[#23a55a]/20 text-[#23a55a]' : 'bg-[#5865f2]/20 text-[#5865f2]'
+                      }`}>
+                        <Mic className={`w-4 h-4 ${isSpeaking ? 'animate-bounce text-[#23a55a]' : ''}`} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-white">Microphone</span>
+                          {isMicReady && (
+                            <span className="text-[10px] bg-[#23a55a]/15 text-[#23a55a] font-bold px-1.5 py-0.2 rounded-full border border-[#23a55a]/30">
+                              Ready
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-[#949ba4] block leading-tight">
+                          {isMicReady
+                            ? (isSpeaking ? 'Voice detected! 🔊' : 'Connected & ready to talk')
+                            : 'Click to allow microphone access'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {!isMicReady ? (
+                      <button
+                        type="button"
+                        onClick={handleEnableMic}
+                        className="px-3 py-1.5 rounded-lg bg-[#5865f2] hover:bg-[#4752c4] text-white text-xs font-bold transition-all shadow-md active:scale-95 flex items-center gap-1.5 touch-manipulation cursor-pointer flex-shrink-0"
+                      >
+                        <Mic className="w-3.5 h-3.5" />
+                        <span>Allow Mic</span>
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-1 text-[#23a55a] text-xs font-semibold px-2 py-1 bg-[#23a55a]/10 rounded-lg border border-[#23a55a]/20">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span className="text-[11px]">Active</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {micErrorMessage && (
+                    <div className="mt-2 text-[11px] text-[#f23f43] bg-[#f23f43]/10 border border-[#f23f43]/20 p-2 rounded-lg leading-relaxed">
+                      {micErrorMessage}
+                    </div>
+                  )}
+                </div>
+
                 <button
                   type="submit"
                   disabled={isLoading || !joinRoomId.trim() || !joinUserName.trim()}
-                  className="w-full mt-3 py-3 rounded-xl bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-50 text-white text-xs font-bold shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  className="w-full mt-3 py-3 rounded-xl bg-[#5865f2] hover:bg-[#4752c4] disabled:opacity-50 text-white text-xs font-bold shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer touch-manipulation"
                 >
                   {isLoading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />

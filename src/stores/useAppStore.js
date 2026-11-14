@@ -49,7 +49,13 @@ export const useAppStore = create((set) => ({
   },
   setMembers: (members) => set({ members }),
   setPlayerState: (playerState) =>
-    set((prev) => ({ playerState: { ...prev.playerState, ...playerState } })),
+    set((prev) => {
+      const next = { ...prev.playerState, ...playerState };
+      if (typeof window !== 'undefined') {
+        window.__afterspot_playerState = next;
+      }
+      return { playerState: next };
+    }),
   setServerOffsetMs: (offset) => set({ serverOffsetMs: offset }),
 }));
 

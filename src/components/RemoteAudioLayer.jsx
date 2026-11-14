@@ -4,73 +4,167 @@ import livekitService from '../services/livekitService';
 import mediaService from '../services/mediaService';
 import AudioUnlockBanner from './AudioUnlockBanner';
 
-function RemoteAudioItem({ peer, onAutoplayBlocked, voicesVolume = 100 }) {
-  const audioRef = useRef(null);
+/**
+ * Shared singleton AudioContext for low-latency Web Audio output across mobile & desktop.
+ * Re-used so that unlocking once on any user touch unlocks all current and future peers.
+ */
+let sharedAudioContext = null;
 
+function getSharedAudioContext() {
+  if (typeof window === 'undefined') return null;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+
+  if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+    try {
+      sharedAudioContext = new AudioContextClass();
+    } catch (e) {
+      console.warn('[RemoteAudioLayer] Could not create shared AudioContext:', e);
+    }
+  }
+  return sharedAudioContext;
+}
+
+/**
+ * Single remote peer audio bridge:
+ * Uses Web Audio API GainNode for 100% reliable output on iOS & Android (where HTMLAudio.volume is ignored),
+ * combined with a non-throttled HTML5 <audio playsInline autoPlay> element.
+ * 
+ * CRITICAL FIX: The audio element is NEVER muted based on peer.isMuted.
+ * WebRTC already sends silence when muted. Toggling audio.muted dynamically on incoming network events
+ * triggers mobile Safari & Android Chrome autoplay policy blocks.
+ */
+function RemoteAudioItem({ peer, voicesVolume = 100, onAutoplayBlocked }) {
+  const audioRef = useRef(null);
+  const webAudioSourceRef = useRef(null);
+  const gainNodeRef = useRef(null);
+
+  // Update volume smoothly via Web Audio GainNode and audio element
   useEffect(() => {
-    const el = audioRef.current;
-    if (el) {
-      el.volume = Math.max(0, Math.min(1, voicesVolume / 100));
+    const vol = Math.max(0, voicesVolume / 100);
+    if (gainNodeRef.current && sharedAudioContext && sharedAudioContext.state !== 'closed') {
+      try {
+        gainNodeRef.current.gain.setTargetAtTime(vol, sharedAudioContext.currentTime, 0.05);
+      } catch {
+        gainNodeRef.current.gain.value = vol;
+      }
+    }
+    if (audioRef.current) {
+      try {
+        audioRef.current.volume = Math.min(1, vol);
+      } catch {}
     }
   }, [voicesVolume]);
 
+  // Connect stream to Web Audio API & HTMLAudioElement
   useEffect(() => {
-    const el = audioRef.current;
-    if (!el || !peer?.stream) return;
+    const stream = peer?.stream;
+    if (!stream) return;
 
-    if (el.srcObject !== peer.stream) {
-      el.srcObject = peer.stream;
-    }
+    const audioTracks = stream.getAudioTracks();
+    const hasLiveAudio = audioTracks.some(t => t.readyState === 'live');
 
-    if (typeof el.setSinkId === 'function' && mediaService.selectedSpeakerId) {
-      el.setSinkId(mediaService.selectedSpeakerId).catch(() => {});
-    }
+    // 1. Web Audio API Connection
+    const ctx = getSharedAudioContext();
+    if (ctx && hasLiveAudio) {
+      try {
+        if (ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
 
-    const unsubOutput = mediaService.subscribe((event, payload) => {
-      if (event === 'audio-output-changed' && typeof el.setSinkId === 'function') {
-        el.setSinkId(payload?.deviceId || '').catch(() => {});
+        // Clean up previous source/gain if stream instance changed
+        if (webAudioSourceRef.current) {
+          try { webAudioSourceRef.current.disconnect(); } catch {}
+          webAudioSourceRef.current = null;
+        }
+
+        const source = ctx.createMediaStreamSource(stream);
+        const gainNode = ctx.createGain();
+        const vol = Math.max(0, voicesVolume / 100);
+        gainNode.gain.value = vol;
+
+        source.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        webAudioSourceRef.current = source;
+        gainNodeRef.current = gainNode;
+      } catch (err) {
+        console.debug('[RemoteAudioLayer] Web Audio attach fallback:', err?.message);
       }
-    });
+    }
 
-    // Set audio element mute state based on peer signaling mute state
-    el.muted = Boolean(peer.isMuted);
+    // 2. HTMLAudioElement Fallback
+    const el = audioRef.current;
+    if (el) {
+      if (el.srcObject !== stream) {
+        el.srcObject = stream;
+      }
 
-    const tryPlay = () => {
+      // CRITICAL: Keep element unmuted so sound is heard immediately when packets flow
+      el.muted = false;
+
+      if (typeof el.setSinkId === 'function' && mediaService.selectedSpeakerId) {
+        el.setSinkId(mediaService.selectedSpeakerId).catch(() => {});
+      }
+
       const p = el.play();
       if (p !== undefined) {
         p.catch(err => {
-          console.debug('[RemoteAudioLayer] Play error for peer', peer.peerId, err?.name);
-          if (err.name === 'NotAllowedError') {
+          console.debug('[RemoteAudioLayer] HTMLAudio play status for', peer.peerId, err?.name);
+          if (err?.name === 'NotAllowedError') {
             onAutoplayBlocked();
           }
         });
       }
-    };
+    }
 
-    tryPlay();
+    // Listen for dynamically added/removed tracks (e.g. when peer turns on mic)
+    const handleTracksChanged = () => {
+      const liveTracks = stream.getAudioTracks().filter(t => t.readyState === 'live');
+      if (liveTracks.length > 0 && ctx && ctx.state !== 'closed' && !webAudioSourceRef.current) {
+        try {
+          if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+          const source = ctx.createMediaStreamSource(stream);
+          const gain = ctx.createGain();
+          gain.gain.value = Math.max(0, voicesVolume / 100);
+          source.connect(gain);
+          gain.connect(ctx.destination);
+          webAudioSourceRef.current = source;
+          gainNodeRef.current = gain;
+        } catch {}
+      }
 
-    const handleTrackChange = () => {
-      if (el && peer.stream) {
-        el.srcObject = peer.stream;
-        tryPlay();
+      if (el) {
+        el.srcObject = stream;
+        el.play().catch(() => {});
       }
     };
 
-    peer.stream.addEventListener('addtrack', handleTrackChange);
-    peer.stream.addEventListener('removetrack', handleTrackChange);
+    stream.addEventListener('addtrack', handleTracksChanged);
+    stream.addEventListener('removetrack', handleTracksChanged);
 
     return () => {
-      unsubOutput();
-      peer.stream.removeEventListener('addtrack', handleTrackChange);
-      peer.stream.removeEventListener('removetrack', handleTrackChange);
+      stream.removeEventListener('addtrack', handleTracksChanged);
+      stream.removeEventListener('removetrack', handleTracksChanged);
+
+      if (webAudioSourceRef.current) {
+        try { webAudioSourceRef.current.disconnect(); } catch {}
+        webAudioSourceRef.current = null;
+      }
+      if (gainNodeRef.current) {
+        try { gainNodeRef.current.disconnect(); } catch {}
+        gainNodeRef.current = null;
+      }
     };
-  }, [peer.stream, peer.isMuted, peer.peerId, onAutoplayBlocked]);
+  }, [peer.stream, peer.peerId, onAutoplayBlocked, voicesVolume]);
 
   return (
     <audio
       ref={audioRef}
       autoPlay
       playsInline
+      className="hidden"
+      aria-hidden="true"
     />
   );
 }
@@ -90,6 +184,9 @@ export default function RemoteAudioLayer({ voicesVolume = 100 }) {
     const unsubWebRTC = peerConnectionService.subscribe((event, payload) => {
       if (event === 'peers-updated') {
         webrtcPeersRef.current = payload || {};
+        updateCombinedPeers();
+      } else if (event === 'remote-track') {
+        // Force refresh on new remote track arrival
         updateCombinedPeers();
       } else if (event === 'autoplay-changed') {
         setAutoplayBlocked(Boolean(payload));
@@ -112,25 +209,52 @@ export default function RemoteAudioLayer({ voicesVolume = 100 }) {
   }, [updateCombinedPeers]);
 
   const handleUnlockAudio = useCallback(async () => {
-    await peerConnectionService.unlockAudio();
-    await livekitService.startAudio();
-    document.querySelectorAll('audio').forEach(a => {
-      if (a.paused && a.srcObject) {
-        a.play().catch(() => {});
+    try {
+      const ctx = getSharedAudioContext();
+      if (ctx && ctx.state === 'suspended') {
+        await ctx.resume().catch(() => {});
       }
-    });
+      await peerConnectionService.unlockAudio();
+      await livekitService.startAudio();
+      document.querySelectorAll('audio').forEach(a => {
+        if (a.paused && a.srcObject) {
+          a.play().catch(() => {});
+        }
+      });
+    } catch {}
     setAutoplayBlocked(false);
   }, []);
 
   const handleAutoplayBlocked = useCallback(() => {
     setAutoplayBlocked(true);
+  }, []);
 
-    const handlePointerDown = () => {
-      handleUnlockAudio();
+  // Universal User Interaction Audio Unlocker
+  // Mobile browsers unlock Web Audio on ANY user touch event
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const unlockOnInteraction = () => {
+      const ctx = getSharedAudioContext();
+      if (ctx && ctx.state === 'suspended') {
+        ctx.resume().then(() => {
+          setAutoplayBlocked(false);
+        }).catch(() => {});
+      }
+      document.querySelectorAll('audio').forEach(a => {
+        if (a.paused && a.srcObject) {
+          a.play().catch(() => {});
+        }
+      });
     };
 
-    window.addEventListener('pointerdown', handlePointerDown, { once: true, passive: true });
-  }, [handleUnlockAudio]);
+    const events = ['touchstart', 'touchend', 'pointerdown', 'click', 'keydown'];
+    events.forEach(evt => window.addEventListener(evt, unlockOnInteraction, { capture: true, passive: true }));
+
+    return () => {
+      events.forEach(evt => window.removeEventListener(evt, unlockOnInteraction, { capture: true }));
+    };
+  }, []);
 
   const remotePeerList = Object.values(peers).filter(p => p && p.stream);
 
@@ -142,17 +266,14 @@ export default function RemoteAudioLayer({ voicesVolume = 100 }) {
         onUnlock={handleUnlockAudio}
       />
 
-      {/* Fixed offscreen persistent audio elements: 1px, opacity-0, pointer-events-none */}
-      <div
-        className="fixed -top-96 -left-96 w-[1px] h-[1px] opacity-0 pointer-events-none overflow-hidden"
-        aria-hidden="true"
-      >
+      {/* Render persistent audio bridge in DOM with zero visual footprint */}
+      <div className="sr-only" aria-hidden="true">
         {remotePeerList.map(peer => (
           <RemoteAudioItem
             key={peer.peerId}
             peer={peer}
-            onAutoplayBlocked={handleAutoplayBlocked}
             voicesVolume={voicesVolume}
+            onAutoplayBlocked={handleAutoplayBlocked}
           />
         ))}
       </div>

@@ -67,7 +67,10 @@ class PeerConnectionService {
   async fetchIceServers(sessionId) {
     try {
       const backendUrl = getBackendUrl();
-      const res = await fetch(`${backendUrl}/api/webrtc/ice-config?sessionId=${encodeURIComponent(sessionId || 'anon')}`);
+      let res = await fetch(`${backendUrl}/api/webrtc/ice-config?sessionId=${encodeURIComponent(sessionId || 'anon')}`);
+      if (!res.ok) {
+        res = await fetch(`${backendUrl}/api/webrtc/ice-servers?sessionId=${encodeURIComponent(sessionId || 'anon')}`);
+      }
       if (res.ok) {
         const config = await res.json();
         if (config && config.iceServers) {
@@ -262,8 +265,10 @@ class PeerConnectionService {
     const pc = record.pc;
 
     try {
-      if (type === 'candidate' || (signal && signal.candidate)) {
-        const cand = signal.candidate ? signal : signal;
+      if (type === 'candidate' || (signal && (signal.candidate !== undefined || signal.sdpMid !== undefined))) {
+        const cand = (signal && typeof signal === 'object' && signal.candidate !== undefined && typeof signal.candidate === 'object')
+          ? signal.candidate
+          : signal;
         if (!pc.remoteDescription || !pc.remoteDescription.type) {
           if (!this.iceCandidatesQueue.has(from)) {
             this.iceCandidatesQueue.set(from, []);
@@ -273,7 +278,9 @@ class PeerConnectionService {
           try {
             await pc.addIceCandidate(new RTCIceCandidate(cand));
           } catch (e) {
-            console.debug('[WebRTC] Candidate error:', e);
+            if (!record.ignoreOffer) {
+              console.debug('[WebRTC] Candidate error:', e);
+            }
           }
         }
       } else if (type === 'offer' || (signal && signal.type === 'offer')) {
@@ -285,6 +292,15 @@ class PeerConnectionService {
         if (record.ignoreOffer) {
           console.warn(`[WebRTC] Glare detected with ${from}: Impolite peer ignoring incoming offer.`);
           return;
+        }
+
+        // Standard W3C rollback for polite peer on offer collision
+        if (offerCollision) {
+          try {
+            await pc.setLocalDescription({ type: 'rollback' });
+          } catch (e) {
+            console.debug('[WebRTC] Rollback error (non-fatal):', e);
+          }
         }
 
         record.isSettingRemoteAnswerPending = false;
@@ -302,7 +318,9 @@ class PeerConnectionService {
       } else if (type === 'answer' || (signal && signal.type === 'answer')) {
         const answer = signal.type ? signal : { type: 'answer', sdp: signal.sdp || signal };
         if (pc.signalingState === 'have-local-offer') {
+          record.isSettingRemoteAnswerPending = true;
           await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          record.isSettingRemoteAnswerPending = false;
           await this.drainQueuedCandidates(from, pc);
         }
       }
@@ -389,6 +407,7 @@ class PeerConnectionService {
       polite,
       makingOffer: false,
       ignoreOffer: false,
+      isSettingRemoteAnswerPending: false,
       connectionState: 'new',
       iceState: 'new',
       iceGatheringState: 'new',
@@ -488,15 +507,16 @@ class PeerConnectionService {
       console.debug(`[WebRTC] Received remote audio track from ${peerId}`);
       let stream = this.remoteStreams.get(peerId);
       if (!stream) {
-        stream = event.streams[0] || new MediaStream();
+        stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
         this.remoteStreams.set(peerId, stream);
-      }
-
-      if (!stream.getTracks().some(t => t.id === event.track.id)) {
-        stream.addTrack(event.track);
+      } else {
+        if (!stream.getTracks().some(t => t.id === event.track.id)) {
+          stream.addTrack(event.track);
+        }
       }
 
       this.initRemoteSpeakingDetector(peerId, event.track);
+      this.notify('remote-track', { peerId, track: event.track, stream });
 
       event.track.onended = () => {
         this.notify('peers-updated', this.getAllPeers());

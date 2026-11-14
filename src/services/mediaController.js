@@ -330,9 +330,13 @@ export class MediaController {
       this.notify('state-changed', { micState: this.micState });
     };
 
-    document.addEventListener('visibilitychange', handleResume);
-    window.addEventListener('pageshow', handleResume);
-    window.addEventListener('focus', handleResume);
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', handleResume);
+    }
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('pageshow', handleResume);
+      window.addEventListener('focus', handleResume);
+    }
   }
 
   async setupPermissionChangeListeners() {

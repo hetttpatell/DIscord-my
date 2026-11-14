@@ -91,7 +91,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Dynamic STUN/TURN ICE Servers configuration endpoint for WebRTC
-app.get('/api/webrtc/ice-servers', async (req, res) => {
+const handleIceConfig = async (req, res) => {
   try {
     const sessionId = req.query.sessionId || 'guest';
     const config = await getIceServerConfig(sessionId);
@@ -106,7 +106,9 @@ app.get('/api/webrtc/ice-servers', async (req, res) => {
       iceCandidatePoolSize: 10
     });
   }
-});
+};
+app.get('/api/webrtc/ice-servers', handleIceConfig);
+app.get('/api/webrtc/ice-config', handleIceConfig);
 
 // LiveKit SFU Access Token Endpoint (Generates short-lived JWT token)
 app.post('/api/livekit/token', async (req, res) => {
@@ -815,14 +817,20 @@ io.on('connection', (socket) => {
   socket.on('webrtc:media-state', (mediaState) => {
     if (!currentRoomId) return;
     const room = rooms.get(currentRoomId);
+    const sanitizedState = typeof mediaState === 'object' && mediaState !== null ? mediaState : {};
     if (room && room.callParticipants && room.callParticipants.has(socket.id)) {
       const prev = room.callParticipants.get(socket.id);
-      room.callParticipants.set(socket.id, { ...prev, isMuted: Boolean(mediaState?.isMuted) });
+      room.callParticipants.set(socket.id, {
+        ...prev,
+        ...sanitizedState,
+        isMuted: Boolean(sanitizedState.isMuted)
+      });
     }
 
     socket.to(currentRoomId).emit('webrtc:media-state-updated', {
+      ...sanitizedState,
       peerId: socket.id,
-      isMuted: Boolean(mediaState?.isMuted)
+      isMuted: Boolean(sanitizedState.isMuted)
     });
   });
 

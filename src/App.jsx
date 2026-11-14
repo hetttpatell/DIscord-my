@@ -499,6 +499,9 @@ export default function App() {
   const isRoomActive = Boolean(room);
   const isHost = Boolean(currentUser?.isHost);
 
+  const activeRemotePeer = Object.values(peers).find(p => p && p.isSpeaking);
+  const activeSpeakerName = activeRemotePeer?.userName || null;
+
   return (
     <div className="min-h-screen bg-[#0B0B10] text-[#F4F1EA] flex flex-col font-sans select-none antialiased">
       <InsecureContextBanner />
@@ -598,11 +601,13 @@ export default function App() {
                 onOpenSearch={() => setIsSearchOpen(true)}
               />
 
-              {/* Voice Action Bar: prominent mic toggle, search button, queue toggle */}
+              {/* Voice Action Bar: prominent mobile phone-call mic toggle, search button, queue toggle */}
               <VoiceActionBar
                 micState={micState}
                 isSpeaking={isSpeaking}
                 queueCount={queue.length}
+                activeSpeakerName={activeSpeakerName}
+                peersCount={Object.keys(peers).length}
                 onToggleMic={handleToggleMic}
                 onOpenSearch={() => setIsSearchOpen(true)}
                 onToggleQueue={() => setIsQueueOpen(prev => !prev)}

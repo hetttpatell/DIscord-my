@@ -72,7 +72,6 @@ async function runTest() {
     console.log(`[Test] Server is live on ${SERVER_URL}`);
 
     const sharedClientId = 'shared-client-tab-test-' + Date.now();
-    const testRoomId = 'RTC' + Math.random().toString(36).substring(2, 6).toUpperCase();
 
     // Connect Socket 1
     const socket1 = io(SERVER_URL, { transports: ['websocket'], forceNew: true });
@@ -95,27 +94,31 @@ async function runTest() {
     console.log('✓ Invariant 1: Distinct socket IDs established');
 
     // Socket 1 creates room
+    let createdRoomId = null;
     await new Promise((resolve, reject) => {
       socket1.emit('room:create', {
-        roomId: testRoomId,
         roomName: 'WebRTC Test Lounge',
-        password: '',
+        password: 'test1234',
         userName: 'Participant 1',
         sessionId: sharedClientId,
         clientId: sharedClientId,
         requireApproval: false
       }, (res) => {
-        if (res?.success) resolve(res);
-        else reject(new Error(res?.message || 'Failed to create room'));
+        if (res?.success) {
+          createdRoomId = res.room.id;
+          resolve(res);
+        } else {
+          reject(new Error(res?.message || 'Failed to create room'));
+        }
       });
     });
-    console.log(`[Test] Socket 1 created room ${testRoomId} with clientId: ${sharedClientId}`);
+    console.log(`[Test] Socket 1 created room ${createdRoomId} with clientId: ${sharedClientId}`);
 
     // Socket 2 joins room with SAME clientId
     await new Promise((resolve, reject) => {
       socket2.emit('room:join', {
-        roomId: testRoomId,
-        password: '',
+        roomId: createdRoomId,
+        password: 'test1234',
         userName: 'Participant 2',
         sessionId: sharedClientId,
         clientId: sharedClientId
@@ -124,7 +127,7 @@ async function runTest() {
         else reject(new Error(res?.message || 'Failed to join room'));
       });
     });
-    console.log(`[Test] Socket 2 joined room ${testRoomId} with shared clientId: ${sharedClientId}`);
+    console.log(`[Test] Socket 2 joined room ${createdRoomId} with shared clientId: ${sharedClientId}`);
 
     // Socket 1 joins WebRTC call
     console.log(`[Test] Emitting webrtc:join-call from socket1 (connected: ${socket1.connected})`);

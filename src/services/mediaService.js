@@ -35,11 +35,15 @@ class MediaService {
 
   /**
    * Feature-detect navigator.audioSession and set type to play-and-record on iOS Safari
+   * with speakerphone routing so sound doesn't get trapped in the earpiece.
    */
   setupAudioSession() {
     if (typeof navigator !== 'undefined' && 'audioSession' in navigator) {
       try {
         navigator.audioSession.type = 'play-and-record';
+        if ('categoryOptions' in navigator.audioSession) {
+          navigator.audioSession.categoryOptions = ['defaultToSpeaker', 'allowBluetooth'];
+        }
       } catch (err) {
         console.debug('[MediaService] navigator.audioSession error:', err);
       }
@@ -156,13 +160,19 @@ class MediaService {
       return existing;
     }
 
-    // Audio fallback chain using ideal constraints only (never exact)
+    // Audio fallback chain using ideal constraints tailored for mobile phone-call acoustics
     const audioTiers = [
       {
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: 48000 },
+          googEchoCancellation: { ideal: true },
+          googAutoGainControl: { ideal: true },
+          googNoiseSuppression: { ideal: true },
+          googHighpassFilter: { ideal: true },
           ...(this.selectedMicId ? { deviceId: { ideal: this.selectedMicId } } : {})
         },
         video: false
@@ -171,7 +181,8 @@ class MediaService {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          channelCount: 1
         },
         video: false
       },
@@ -416,9 +427,13 @@ class MediaService {
       }
     };
 
-    document.addEventListener('visibilitychange', onResume);
-    window.addEventListener('pageshow', onResume);
-    window.addEventListener('focus', onResume);
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', onResume);
+    }
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('pageshow', onResume);
+      window.addEventListener('focus', onResume);
+    }
   }
 
   /**

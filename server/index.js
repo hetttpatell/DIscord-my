@@ -20,6 +20,7 @@ export const logger = pino({
 });
 
 const app = express();
+app.set('trust proxy', 1);
 const httpServer = createServer(app);
 
 // CORS configuration locked strictly to CLIENT_ORIGIN (with local dev allowance)

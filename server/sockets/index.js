@@ -15,6 +15,10 @@ const pingSchema = z.object({
   clientTime: z.number(),
 });
 
+const voiceStateSchema = z.object({
+  isMicEnabled: z.boolean(),
+});
+
 // Per-socket rate limiter: max 30 events per 5 seconds
 function createSocketRateLimiter(maxEvents = 30, windowMs = 5000) {
   const eventTimestamps = [];
@@ -153,6 +157,19 @@ export function setupSocketIO(io) {
       if (updated) {
         io.to(roomId).emit('player:state', updated);
       }
+    });
+
+    // voice:state
+    socket.on('voice:state', (payload) => {
+      if (!isAllowed()) return;
+      const parsed = voiceStateSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      io.to(roomId).emit('voice:state', {
+        memberId,
+        displayName,
+        isMicEnabled: parsed.data.isMicEnabled,
+      });
     });
 
     // Handle disconnection

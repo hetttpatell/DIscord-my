@@ -1,14 +1,14 @@
 import React from 'react';
-import { Mic, MicOff, Search, Users } from 'lucide-react';
+import { Search, Users } from 'lucide-react';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
+import { MicButton } from '../voice/MicButton';
 
 export function RoomDock({
-  isMuted = true,
-  onToggleMic,
   onOpenSearch,
   onToggleMembers,
   membersCount = 1,
+  micSlot,
 }) {
   return (
     <nav
@@ -16,26 +16,8 @@ export function RoomDock({
       className="fixed bottom-0 left-0 right-0 z-30 flex items-center justify-center p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[#0B0B10]/90 backdrop-blur-xl border-t border-white/10"
     >
       <div className="flex items-center gap-3 bg-[#141419] border border-white/10 rounded-2xl p-1.5 shadow-2xl">
-        {/* Mic Toggle Button */}
-        <Button
-          variant={isMuted ? 'secondary' : 'primary'}
-          size="default"
-          onClick={onToggleMic}
-          aria-label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
-          className="gap-2 font-medium"
-        >
-          {isMuted ? (
-            <>
-              <MicOff className="w-4 h-4 text-[#FF5A5F]" />
-              <span className="text-xs">Muted</span>
-            </>
-          ) : (
-            <>
-              <Mic className="w-4 h-4 text-[#0B0B10]" />
-              <span className="text-xs text-[#0B0B10] font-bold">Live</span>
-            </>
-          )}
-        </Button>
+        {/* Microphone Toggle (from LiveKit) */}
+        {micSlot || <MicButton />}
 
         {/* Search YouTube Button */}
         <Button
@@ -69,4 +51,3 @@ export function RoomDock({
 }
 
 export default RoomDock;
-

@@ -1,6 +1,12 @@
 import { io } from 'socket.io-client';
 
-const API_URL = import.meta.env.VITE_API_URL || '';
+const rawUrl =
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.API_URL ||
+  import.meta.env.VITE_BACKEND_URL ||
+  import.meta.env.BACKEND_URL ||
+  '';
+const API_URL = rawUrl ? rawUrl.replace(/\/+$/, '') : '';
 
 let activeSocket = null;
 

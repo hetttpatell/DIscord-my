@@ -6,7 +6,16 @@ import basicSsl from '@vitejs/plugin-basic-ssl'
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const backendUrl = env.BACKEND_URL || env.VITE_BACKEND_URL || process.env.BACKEND_URL || process.env.VITE_BACKEND_URL || '';
+  const backendUrl =
+    env.API_URL ||
+    env.VITE_API_URL ||
+    env.BACKEND_URL ||
+    env.VITE_BACKEND_URL ||
+    process.env.API_URL ||
+    process.env.VITE_API_URL ||
+    process.env.BACKEND_URL ||
+    process.env.VITE_BACKEND_URL ||
+    '';
   const enableSsl = env.HTTPS === 'true' || process.env.HTTPS === 'true';
 
   return {
@@ -16,6 +25,8 @@ export default defineConfig(({ mode }) => {
       ...(enableSsl ? [basicSsl()] : [])
     ],
     define: {
+      'import.meta.env.API_URL': JSON.stringify(backendUrl),
+      'import.meta.env.VITE_API_URL': JSON.stringify(backendUrl),
       'import.meta.env.BACKEND_URL': JSON.stringify(backendUrl),
       'import.meta.env.VITE_BACKEND_URL': JSON.stringify(backendUrl)
     },

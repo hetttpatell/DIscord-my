@@ -1,4 +1,10 @@
-const API_BASE = import.meta.env.VITE_API_URL || '';
+const rawBase =
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.API_URL ||
+  import.meta.env.VITE_BACKEND_URL ||
+  import.meta.env.BACKEND_URL ||
+  '';
+const API_BASE = rawBase ? rawBase.replace(/\/+$/, '') : '';
 
 export async function apiRequest(endpoint, { method = 'GET', body, token } = {}) {
   const headers = {

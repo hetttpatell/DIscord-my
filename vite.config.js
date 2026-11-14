@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_BACKEND_URL': JSON.stringify(backendUrl)
     },
     server: {
-      port: 5173,
+      port: 5174,
       host: true,
       proxy: {
         '/socket.io': {

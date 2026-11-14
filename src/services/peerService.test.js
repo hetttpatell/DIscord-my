@@ -101,3 +101,4 @@ describe('PeerService Unit Tests', () => {
     assert.equal(peerService.voicesVolume, 0);
   });
 });
+

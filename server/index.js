@@ -23,23 +23,32 @@ const app = express();
 app.set('trust proxy', 1);
 const httpServer = createServer(app);
 
-// CORS configuration locked strictly to CLIENT_ORIGIN (with local dev allowance)
+// CORS configuration supporting CLIENT_ORIGIN, Vercel deployments, and local dev
 const corsOptions = {
   origin: (origin, callback) => {
     // Allow requests with no origin (e.g. mobile apps, curl, or same-origin)
+    if (!origin) return callback(null, true);
+
+    const normOrigin = origin.replace(/\/+$/, '');
+    const allowedOrigins = (config.CLIENT_ORIGIN || '')
+      .split(',')
+      .map((o) => o.trim().replace(/\/+$/, ''))
+      .filter(Boolean);
+
     if (
-      !origin ||
-      origin === config.CLIENT_ORIGIN ||
-      (config.NODE_ENV !== 'production' &&
-        (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')))
+      allowedOrigins.includes(normOrigin) ||
+      normOrigin.endsWith('.vercel.app') ||
+      normOrigin.startsWith('http://localhost:') ||
+      normOrigin.startsWith('http://127.0.0.1:')
     ) {
       return callback(null, true);
     }
-    return callback(new Error('CORS policy: Not allowed by origin'));
+    return callback(new Error(`CORS policy: Origin ${origin} not allowed`));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 204,
 };
 
 app.use(cors(corsOptions));

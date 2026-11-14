@@ -138,6 +138,8 @@ export default function App() {
         setIsSpeaking(Boolean(current.isSpeaking));
         if (current.micState === 'blocked') {
           setIsMicModalOpen(true);
+        } else if (current.micState === 'on' || current.micState === 'off') {
+          setIsMicModalOpen(false);
         } else if (current.micState === 'insecure') {
           showToast('Microphone requires HTTPS or localhost');
         } else if (current.micState === 'error' && current.error?.message) {
@@ -538,6 +540,7 @@ export default function App() {
       <MicPermissionModal
         isOpen={isMicModalOpen}
         onClose={() => setIsMicModalOpen(false)}
+        error={mediaController.error}
         onRetry={async () => {
           setIsMicModalOpen(false);
           await mediaController.retryPermission();

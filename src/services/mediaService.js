@@ -1,3 +1,5 @@
+import { logMediaDebug, getPlatformInfo } from './mediaLogger.js';
+
 /**
  * Centralized Audio Media Management Service
  * Provides robust, cross-platform audio track lifecycle management
@@ -26,6 +28,9 @@ class MediaService {
     this.analyser = null;
     this.analyserInterval = null;
     this.speakingThreshold = 0.035; // Normalized RMS threshold
+
+    // Log platform diagnostics
+    logMediaDebug('platform:detected', getPlatformInfo());
 
     // Configure iOS Safari audio session if available
     this.setupAudioSession();
@@ -68,13 +73,24 @@ class MediaService {
         throw err;
       }
 
-      return await navigator.mediaDevices.getUserMedia(constraints);
+      logMediaDebug('getUserMedia:call', { constraints });
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      logMediaDebug('getUserMedia:success', {
+        trackCount: stream.getAudioTracks().length,
+        trackId: stream.getAudioTracks()[0]?.id,
+        readyState: stream.getAudioTracks()[0]?.readyState
+      });
+      return stream;
     } catch (err) {
       this.lastGetUserMediaError = {
         name: err.name || 'Error',
         message: err.message || String(err),
         constraints
       };
+      logMediaDebug('getUserMedia:error', {
+        name: err.name || 'Error',
+        message: err.message || String(err)
+      });
       console.error('[media]', err.name || 'Error', err.message || String(err));
       throw err;
     }
@@ -109,18 +125,22 @@ class MediaService {
   }
 
   /**
-   * Check browser permission status if supported
+   * Check browser permission status if supported.
+   * Does not assume the Permissions API is supported on every mobile browser.
    */
   async checkMicPermission() {
-    if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
-      try {
-        const res = await navigator.permissions.query({ name: 'microphone' });
-        return res.state; // 'granted' | 'denied' | 'prompt'
-      } catch {
-        return 'unknown';
-      }
+    if (typeof navigator === 'undefined' || !navigator.permissions || typeof navigator.permissions.query !== 'function') {
+      return 'unknown';
     }
-    return 'unknown';
+    try {
+      const res = await navigator.permissions.query({ name: 'microphone' });
+      const state = res?.state || 'unknown';
+      logMediaDebug('permission:query', { state });
+      return state; // 'granted' | 'denied' | 'prompt'
+    } catch (err) {
+      logMediaDebug('permission:query-unsupported', { error: err?.message });
+      return 'unknown';
+    }
   }
 
   /**
@@ -140,18 +160,19 @@ class MediaService {
   }
 
   /**
-   * Acquire microphone audio track with progressive constraints fallback.
-   * Only uses ideal constraints, never exact.
+   * Acquire microphone audio track with native constraints and safe fallback.
+   * Must be called from a user interaction (button click/tap).
    */
   async acquireAudioTrack(initialMuted = false) {
     this.lastError = null;
     this.setupAudioSession();
 
-    // Return existing live audio track if available and set its enabled state
+    // 1. Return existing live audio track if available and set its enabled state
     const existing = this.localStream?.getAudioTracks().find(t => t.readyState === 'live');
     if (existing) {
       existing.enabled = !initialMuted;
       this.isMicOn = !initialMuted;
+      logMediaDebug('track:reuse-existing', { id: existing.id, enabled: existing.enabled });
       if (!initialMuted) {
         this.initSpeakingDetector();
       }
@@ -160,41 +181,59 @@ class MediaService {
       return existing;
     }
 
-    // Clean, universally supported WebRTC audio constraints.
-    // Avoid non-standard flags or raw numbers that trigger OverconstrainedError on Android HAL.
-    const audioTiers = [
-      {
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          ...(this.selectedMicId ? { deviceId: { ideal: this.selectedMicId } } : {})
-        }
+    // 2. Check secure context
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      const err = new Error('Insecure context: Microphone requires HTTPS or localhost.');
+      err.name = 'InsecureContextError';
+      this.lastError = this.parseMediaError(err, 'audio');
+      logMediaDebug('mic:insecure-blocked', {});
+      this.notify('error', this.lastError);
+      this.notify('state-changed', { isMicOn: false });
+      return null;
+    }
+
+    // 3. Query browser permission status for logging & diagnostics
+    const permStatus = await this.checkMicPermission();
+    logMediaDebug('mic:permission-state', { permStatus });
+
+    // 4. Standard W3C constraints recommended for WebRTC voice
+    const primaryConstraints = {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        ...(this.selectedMicId ? { deviceId: { ideal: this.selectedMicId } } : {})
       },
-      {
-        audio: true
-      }
-    ];
+      video: false
+    };
+
+    const fallbackConstraints = {
+      audio: true,
+      video: false
+    };
 
     let audioStream = null;
     let lastAudioErr = null;
 
-    for (const constraints of audioTiers) {
-      try {
-        audioStream = await this.callGetUserMedia(constraints);
-        if (audioStream && audioStream.getAudioTracks().length > 0) {
-          break;
+    try {
+      audioStream = await this.callGetUserMedia(primaryConstraints);
+    } catch (err) {
+      lastAudioErr = err;
+      // Only fallback on overconstrained errors; never retry on NotAllowedError (which indicates user denial)
+      if (err.name === 'OverconstrainedError' || err.name === 'ConstraintNotSatisfiedError') {
+        try {
+          logMediaDebug('mic:overconstrained-fallback', {});
+          audioStream = await this.callGetUserMedia(fallbackConstraints);
+        } catch (fallbackErr) {
+          lastAudioErr = fallbackErr;
         }
-      } catch (err) {
-        lastAudioErr = err;
-        console.warn('[MediaService] Audio constraint tier failed, falling back:', err.name, err.message);
       }
     }
 
     if (!audioStream || audioStream.getAudioTracks().length === 0) {
-      console.warn('[MediaService] All audio constraint tiers failed');
       this.isMicOn = false;
       this.lastError = this.parseMediaError(lastAudioErr || new Error('No audio input'), 'audio');
+      logMediaDebug('mic:acquire-failed', this.lastError);
       this.notify('error', this.lastError);
       this.notify('state-changed', { isMicOn: false });
       return null;
@@ -203,6 +242,13 @@ class MediaService {
     const newAudioTrack = audioStream.getAudioTracks()[0];
     newAudioTrack.enabled = !initialMuted;
     this.isMicOn = !initialMuted;
+
+    logMediaDebug('track:acquired', {
+      id: newAudioTrack.id,
+      label: newAudioTrack.label,
+      enabled: newAudioTrack.enabled,
+      readyState: newAudioTrack.readyState
+    });
 
     this.bindTrackEvents(newAudioTrack, 'audio');
 
@@ -227,35 +273,22 @@ class MediaService {
   }
 
   /**
-   * Bind event listeners to MediaStreamTrack (mute, unmute, ended)
+   * Bind event listeners to MediaStreamTrack (mute, unmute, ended).
+   * Note: Never invokes getUserMedia automatically from background events.
    */
   bindTrackEvents(track, kind) {
-    let muteTimer = null;
-
     const onMute = () => {
-      console.warn(`[MediaService] ${kind} track muted by system`);
+      logMediaDebug('track:muted-by-system', { kind, id: track.id });
       this.notify('track-muted', { track, kind });
-      if (muteTimer) clearTimeout(muteTimer);
-      muteTimer = setTimeout(async () => {
-        if (track.muted && kind === 'audio' && this.isMicOn) {
-          console.warn(`[MediaService] ${kind} track muted for >1s, auto-reacquiring...`);
-          await this.reacquireTrack(kind);
-        }
-      }, 1000);
     };
 
     const onUnmute = () => {
-      console.debug(`[MediaService] ${kind} track unmuted by system`);
-      if (muteTimer) {
-        clearTimeout(muteTimer);
-        muteTimer = null;
-      }
+      logMediaDebug('track:unmuted-by-system', { kind, id: track.id });
       this.notify('track-unmuted', { track, kind });
     };
 
-    const onEnded = async () => {
-      console.warn(`[MediaService] ${kind} track ended`);
-      if (muteTimer) clearTimeout(muteTimer);
+    const onEnded = () => {
+      logMediaDebug('track:ended', { kind, id: track.id });
       if (kind === 'audio') {
         this.isMicOn = false;
       }
@@ -268,7 +301,7 @@ class MediaService {
   }
 
   /**
-   * Re-acquire audio track on system interruption and notify subscribers to replace on senders
+   * Re-acquire audio track on explicit user request
    */
   async reacquireTrack(kind = 'audio') {
     if (kind === 'audio') {
@@ -317,18 +350,24 @@ class MediaService {
     try {
       const micStatus = await navigator.permissions.query({ name: 'microphone' });
       micStatus.onchange = () => {
+        logMediaDebug('permission:change', { state: micStatus.state });
         if (micStatus.state === 'granted') {
           this.lastError = null;
           this.lastGetUserMediaError = null;
           this.resetReacquireGuard();
           this.notify('permission-granted', { permission: 'granted' });
+        } else if (micStatus.state === 'denied') {
+          this.lastError = this.parseMediaError({ name: 'NotAllowedError' });
+          this.notify('permission-denied', { permission: 'denied' });
         }
       };
-    } catch {}
+    } catch (err) {
+      logMediaDebug('permission:query-unsupported', { error: err?.message });
+    }
   }
 
   /**
-   * Reset consecutive failure count and rate-limiting timestamp (e.g., when user taps Retry)
+   * Reset consecutive failure count and rate-limiting timestamp
    */
   resetReacquireGuard() {
     this.consecutiveReacquireFailures = 0;
@@ -351,65 +390,32 @@ class MediaService {
   }
 
   /**
-   * Handle mobile app switcher / screen lock lifecycle
+   * Handle mobile tab switching and page visibility changes.
+   * Never calls getUserMedia automatically without direct user gesture.
    */
   setupMobileLifecycleListeners() {
     if (typeof document === 'undefined') return;
 
-    const onResume = async () => {
-      if (document.visibilityState !== 'visible') return;
+    const onVisibilityChange = () => {
+      const isVisible = document.visibilityState === 'visible';
+      logMediaDebug('lifecycle:visibility', { visibilityState: document.visibilityState });
+      if (!isVisible) return;
 
+      // When tab becomes visible again, verify track status without calling getUserMedia
       const audioTrack = this.localStream?.getAudioTracks()[0];
-      const needsAudio = this.isMicOn && (!audioTrack || audioTrack.readyState === 'ended' || audioTrack.muted);
-
-      if (!needsAudio) {
-        this.resetReacquireGuard();
-        return;
-      }
-
-      // Check explicit permission denial before re-requesting
-      const isDenied = await this.isPermissionDenied('microphone');
-      if (isDenied) {
-        console.debug('[MediaService] Lifecycle check: Mic permission denied, aborting re-acquire.');
-        return;
-      }
-
-      // Rate limit re-acquisition: wait at least 3000ms between attempts
-      const now = Date.now();
-      if (now - this.lastReacquireAttemptAt < 3000) {
-        console.debug('[MediaService] Lifecycle check throttled (<3s since last attempt)');
-        return;
-      }
-
-      // Max 3 consecutive failures before requiring user manual intervention
-      if (this.consecutiveReacquireFailures >= 3) {
-        console.warn('[MediaService] Reached max 3 consecutive re-acquire failures. User must tap Retry.');
-        this.notify('reacquire-blocked', { reason: 'max_failures_exceeded' });
-        return;
-      }
-
-      this.lastReacquireAttemptAt = now;
-
-      try {
-        console.debug('[MediaService] Lifecycle check: Re-acquiring audio track...');
-        const newTrack = await this.reacquireTrack('audio');
-        if (newTrack) {
-          this.consecutiveReacquireFailures = 0;
-        } else {
-          this.consecutiveReacquireFailures++;
-        }
-      } catch (err) {
-        this.consecutiveReacquireFailures++;
-        console.error('[MediaService] Lifecycle re-acquire audio error:', err);
+      if (audioTrack && audioTrack.readyState === 'ended') {
+        logMediaDebug('track:ended-while-hidden', { id: audioTrack.id });
+        this.isMicOn = false;
+        this.notify('state-changed', { isMicOn: false });
       }
     };
 
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
-      document.addEventListener('visibilitychange', onResume);
+      document.addEventListener('visibilitychange', onVisibilityChange);
     }
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-      window.addEventListener('pageshow', onResume);
-      window.addEventListener('focus', onResume);
+      window.addEventListener('pageshow', onVisibilityChange);
+      window.addEventListener('focus', onVisibilityChange);
     }
   }
 
@@ -491,7 +497,7 @@ class MediaService {
       return {
         type: 'PERMISSION_DENIED',
         name,
-        message: 'Microphone permission was denied. Please allow it in your site settings, then tap Retry.',
+        message: 'Microphone permission was denied. Please enable microphone access in Chrome site settings.',
         device
       };
     }
@@ -499,7 +505,7 @@ class MediaService {
       return {
         type: 'NOT_FOUND',
         name,
-        message: 'No microphone device found.',
+        message: 'No microphone found. Please check your device microphone.',
         device
       };
     }
@@ -507,7 +513,7 @@ class MediaService {
       return {
         type: 'HARDWARE_IN_USE',
         name,
-        message: 'The microphone is in use by another app. Please close it and retry.',
+        message: 'Microphone is busy. Please close other applications using the microphone and retry.',
         device
       };
     }

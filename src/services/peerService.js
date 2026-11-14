@@ -16,6 +16,7 @@
 import PeerJS from 'peerjs';
 import socket, { getBackendUrl } from './socket.js';
 import mediaController from './mediaController.js';
+import { logMediaDebug } from './mediaLogger.js';
 
 // Resolve Peer constructor across ESM / CommonJS / bundler variants
 const Peer = typeof PeerJS === 'function' ? PeerJS : (PeerJS?.Peer || PeerJS?.default || PeerJS);
@@ -210,25 +211,30 @@ class PeerService {
       };
 
       this.peer = new Peer(this.peerId, peerOptions);
+      logMediaDebug('peer:init', { peerId: this.peerId, iceServerCount: iceServers.length });
 
       this.peer.on('open', (id) => {
         this.peerId = id;
         this.isReady = true;
+        logMediaDebug('peer:open', { peerId: id });
         this.notify('open', { peerId: id });
         this.notify('state-changed');
       });
 
       this.peer.on('call', (incomingCall) => {
+        logMediaDebug('peer:incoming-call-event', { callerPeer: incomingCall?.peer });
         this.handleIncomingCall(incomingCall);
       });
 
       this.peer.on('error', (err) => {
+        logMediaDebug('peer:error', { type: err?.type, message: err?.message });
         console.warn('[PeerService] PeerJS error:', err?.type || err?.message);
         this.handlePeerError(err);
       });
 
       this.peer.on('disconnected', () => {
         this.isReady = false;
+        logMediaDebug('peer:disconnected', {});
         this.notify('disconnected');
         // Attempt silent reconnection to PeerJS server if not deliberately destroyed
         if (this.peer && !this.peer.destroyed) {
@@ -240,6 +246,7 @@ class PeerService {
 
       this.peer.on('close', () => {
         this.isReady = false;
+        logMediaDebug('peer:close', {});
         this.notify('close');
       });
 
@@ -323,22 +330,31 @@ class PeerService {
     try {
       // 1. Acquire local microphone stream via mediaController
       let stream = mediaController.stream;
-      if (!stream || !stream.getAudioTracks().some(t => t.readyState === 'live')) {
-        await mediaController.toggleMic();
+      let audioTrack = stream?.getAudioTracks().find(t => t.readyState === 'live');
+      if (!audioTrack) {
+        await mediaController.enableMic();
         stream = mediaController.stream;
+        audioTrack = stream?.getAudioTracks().find(t => t.readyState === 'live');
       }
 
-      if (!stream || !stream.getAudioTracks().some(t => t.readyState === 'live')) {
+      if (!audioTrack) {
         if (mediaController.micState === 'blocked') {
-          throw new Error('Microphone permission blocked. Please allow microphone access to make a call.');
+          throw new Error('Microphone permission blocked. Please allow microphone access in site settings to make a call.');
+        } else if (mediaController.micState === 'insecure') {
+          throw new Error('Microphone access requires a secure HTTPS connection.');
         } else {
-          throw new Error('Microphone unavailable.');
+          throw new Error(mediaController.error?.message || 'Microphone unavailable.');
         }
       }
 
       // Ensure local audio track is enabled
-      const audioTrack = stream.getAudioTracks()[0];
-      if (audioTrack) audioTrack.enabled = true;
+      audioTrack.enabled = true;
+
+      logMediaDebug('peer:call-initiating', {
+        targetPeerId,
+        trackId: audioTrack.id,
+        callerId: this.user.clientId
+      });
 
       // 2. Initiate PeerJS call
       const call = this.peer.call(targetPeerId, stream, {
@@ -394,23 +410,32 @@ class PeerService {
     if (this.callState !== 'ringing' || !this.currentCall) return;
 
     try {
-      // 1. Acquire local microphone stream
+      // 1. Acquire local microphone stream via mediaController
       let stream = mediaController.stream;
-      if (!stream || !stream.getAudioTracks().some(t => t.readyState === 'live')) {
-        await mediaController.toggleMic();
+      let audioTrack = stream?.getAudioTracks().find(t => t.readyState === 'live');
+      if (!audioTrack) {
+        await mediaController.enableMic();
         stream = mediaController.stream;
+        audioTrack = stream?.getAudioTracks().find(t => t.readyState === 'live');
       }
 
-      if (!stream || !stream.getAudioTracks().some(t => t.readyState === 'live')) {
+      if (!audioTrack) {
         if (mediaController.micState === 'blocked') {
-          throw new Error('Microphone permission blocked. Please allow microphone access to accept the call.');
+          throw new Error('Microphone permission blocked. Please allow microphone access in site settings to accept the call.');
+        } else if (mediaController.micState === 'insecure') {
+          throw new Error('Microphone access requires a secure HTTPS connection.');
+        } else {
+          throw new Error(mediaController.error?.message || 'Microphone unavailable.');
         }
-        throw new Error('Microphone unavailable.');
       }
 
       // Ensure local track is enabled
-      const audioTrack = stream.getAudioTracks()[0];
-      if (audioTrack) audioTrack.enabled = true;
+      audioTrack.enabled = true;
+
+      logMediaDebug('peer:call-answering', {
+        callerId: this.remoteUser?.id,
+        trackId: audioTrack.id
+      });
 
       // 2. Answer incoming call
       this.currentCall.answer(stream);
@@ -458,6 +483,15 @@ class PeerService {
 
     this.cleanupAudioNodes();
     this.cleanupCallState();
+
+    // Release microphone tracks and hardware per Requirement 5
+    try {
+      mediaController.stopMic();
+    } catch (e) {
+      console.warn('[PeerService] stopMic on endCall error:', e);
+    }
+
+    logMediaDebug('peer:call-ended', { reason });
 
     this.callState = 'disconnected';
     if (reason) {
@@ -519,7 +553,7 @@ class PeerService {
       socket.emit('webrtc:media-state', { isMuted: true });
     } else {
       // Unmute
-      await mediaController.toggleMic();
+      await mediaController.enableMic();
       if (mediaController.stream) {
         const track = mediaController.stream.getAudioTracks()[0];
         if (track) track.enabled = true;
@@ -557,10 +591,15 @@ class PeerService {
     this.callState = 'connected';
     this.startDurationTimer();
 
-    // 1. Set up Web Audio API routing for smooth mobile volume & ducking
+    logMediaDebug('peer:remote-stream-connected', {
+      trackCount: remoteStream.getAudioTracks().length,
+      trackReadyState: remoteStream.getAudioTracks()[0]?.readyState
+    });
+
+    // 1. Set up Web Audio API analyser for visualizer & speech detection (no destination output)
     this.setupWebAudio(remoteStream);
 
-    // 2. Set up background HTMLAudioElement
+    // 2. Play remote audio via primary HTMLAudioElement
     this.setupAudioElement(remoteStream);
 
     this.notify('peers-updated', this.getPeers());
@@ -582,26 +621,30 @@ class PeerService {
         this.audioContext.resume().catch(() => {});
       }
 
-      // Disconnect previous nodes if any
-      this.cleanupAudioNodes();
+      // Disconnect previous audio nodes if any
+      if (this.remoteSourceNode) {
+        try { this.remoteSourceNode.disconnect(); } catch {}
+        this.remoteSourceNode = null;
+      }
+      if (this.analyserNode) {
+        try { this.analyserNode.disconnect(); } catch {}
+        this.analyserNode = null;
+      }
+      if (this.gainNode) {
+        try { this.gainNode.disconnect(); } catch {}
+        this.gainNode = null;
+      }
 
+      // Connect source to analyser for RMS speech monitoring ONLY.
+      // Audio output is handled cleanly by HTMLAudioElement to avoid echo/doubling.
       const source = this.audioContext.createMediaStreamSource(stream);
-      const gain = this.audioContext.createGain();
       const analyser = this.audioContext.createAnalyser();
 
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.4;
-
-      const vol = Math.max(0, this.voicesVolume / 100);
-      gain.gain.value = vol;
-
-      source.connect(gain);
-      gain.connect(this.audioContext.destination);
-
       source.connect(analyser);
 
       this.remoteSourceNode = source;
-      this.gainNode = gain;
       this.analyserNode = analyser;
 
       // Start periodic speech level monitoring
@@ -627,11 +670,21 @@ class PeerService {
     }
 
     this.audioElement.srcObject = stream;
+    this.audioElement.muted = false;
     this.audioElement.volume = Math.max(0, Math.min(1, this.voicesVolume / 100));
 
-    this.audioElement.play().catch(err => {
-      console.debug('[PeerService] Autoplay policy prevented direct audio element playback:', err?.message);
-    });
+    const playPromise = this.audioElement.play();
+    if (playPromise !== undefined) {
+      playPromise
+        .then(() => {
+          logMediaDebug('audio-element:playing', { volume: this.audioElement.volume });
+          this.notify('autoplay-changed', false);
+        })
+        .catch(err => {
+          logMediaDebug('audio-element:autoplay-blocked', { error: err?.name });
+          this.notify('autoplay-changed', true);
+        });
+    }
   }
 
   startSpeechDetection() {
@@ -695,8 +748,12 @@ class PeerService {
     }
     if (this.audioElement) {
       try {
+        this.audioElement.muted = false;
         await this.audioElement.play();
-      } catch {}
+        this.notify('autoplay-changed', false);
+      } catch (err) {
+        logMediaDebug('audio-element:unlock-failed', { error: err?.message });
+      }
     }
   }
 

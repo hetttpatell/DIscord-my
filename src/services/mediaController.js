@@ -18,6 +18,7 @@
  */
 
 import mediaService from './mediaService.js';
+import { logMediaDebug } from './mediaLogger.js';
 
 export class MediaController {
   constructor() {
@@ -141,42 +142,31 @@ export class MediaController {
         this.error = null;
         this.consecutiveReacquireFailures = 0;
       } else {
-        const lastErrName = mediaService.lastError?.name || '';
+        const lastErr = mediaService.lastError;
         const permissionStatus = await mediaService.checkMicPermission();
-        const isInsecure = lastErrName === 'InsecureContextError' || !this.isSecureContext;
 
-        if (isInsecure) {
+        if (lastErr?.type === 'INSECURE_CONTEXT' || !this.isSecureContext) {
           this.micState = 'insecure';
-        } else if (permissionStatus === 'denied') {
-          // Explicitly blocked in browser site settings
-          this.micState = 'blocked';
-        } else if (permissionStatus === 'granted') {
-          // Permission IS granted in browser; device might be busy, but NOT blocked
-          this.micState = 'off';
-        } else if (lastErrName === 'NotAllowedError' || lastErrName === 'PermissionDeniedError') {
+        } else if (permissionStatus === 'denied' || lastErr?.type === 'PERMISSION_DENIED') {
           this.micState = 'blocked';
         } else {
           this.micState = 'error';
         }
-        this.error = mediaService.lastError;
+        this.error = lastErr;
       }
     } catch (err) {
       console.error('[media] enableMic error:', err);
+      const parsedErr = mediaService.parseMediaError(err, 'audio');
       const permissionStatus = await mediaService.checkMicPermission();
-      const isInsecure = err?.name === 'InsecureContextError' || !this.isSecureContext;
 
-      if (isInsecure) {
+      if (parsedErr.type === 'INSECURE_CONTEXT' || !this.isSecureContext) {
         this.micState = 'insecure';
-      } else if (permissionStatus === 'denied') {
-        this.micState = 'blocked';
-      } else if (permissionStatus === 'granted') {
-        this.micState = 'off';
-      } else if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+      } else if (permissionStatus === 'denied' || parsedErr.type === 'PERMISSION_DENIED') {
         this.micState = 'blocked';
       } else {
         this.micState = 'error';
       }
-      this.error = mediaService.parseMediaError(err, 'audio');
+      this.error = parsedErr;
     } finally {
       this.audioInFlight = false;
       this.notify('state-changed', { micState: this.micState, error: this.error });
@@ -224,6 +214,17 @@ export class MediaController {
         }
       }
     }
+  }
+
+  stopMic() {
+    this.pendingAudioIntent = null;
+    this.audioInFlight = false;
+    this.isSpeaking = false;
+    this.isAudioMutedBySystem = false;
+    this.micState = 'off';
+    this.error = null;
+    mediaService.stopAll();
+    this.notify('state-changed', this.getState());
   }
 
   async setAudioInput(deviceId) {
@@ -301,45 +302,15 @@ export class MediaController {
   setupMobileLifecycleListeners() {
     if (typeof document === 'undefined') return;
 
-    const handleResume = async () => {
+    const handleResume = () => {
       if (document.visibilityState !== 'visible') return;
 
       const audioTrack = this.stream?.getAudioTracks()[0];
-      const needsAudio = this.micState === 'on' && (!audioTrack || audioTrack.readyState === 'ended' || audioTrack.muted);
-
-      if (!needsAudio) return;
-
-      const isDenied = await mediaService.isPermissionDenied('microphone');
-      if (isDenied) {
-        this.micState = 'blocked';
-        this.notify('state-changed', { micState: 'blocked' });
-        return;
+      if (audioTrack && audioTrack.readyState === 'ended') {
+        logMediaDebug('controller:track-ended-hidden', { id: audioTrack.id });
+        this.micState = 'off';
+        this.notify('state-changed', { micState: 'off' });
       }
-
-      const now = Date.now();
-      if (now - this.lastReacquireAttemptAt < 3000) return;
-      if (this.consecutiveReacquireFailures >= 3) {
-        this.notify('reacquire-blocked', { reason: 'max_failures_exceeded' });
-        return;
-      }
-
-      this.lastReacquireAttemptAt = now;
-
-      if (needsAudio) {
-        try {
-          const newTrack = await mediaService.reacquireTrack('audio');
-          if (newTrack) {
-            this.micState = 'on';
-            this.consecutiveReacquireFailures = 0;
-          } else {
-            this.consecutiveReacquireFailures++;
-          }
-        } catch {
-          this.consecutiveReacquireFailures++;
-        }
-      }
-
-      this.notify('state-changed', { micState: this.micState });
     };
 
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
@@ -357,17 +328,23 @@ export class MediaController {
     try {
       const micStatus = await navigator.permissions.query({ name: 'microphone' });
       const handleMicChange = () => {
-        if (micStatus.state === 'granted' && (this.micState === 'blocked' || this.micState === 'error')) {
+        logMediaDebug('controller:permission-change', { state: micStatus.state });
+        if (micStatus.state === 'granted') {
           this.error = null;
           this.micState = 'off';
-          this.notify('state-changed', { micState: 'off' });
+          mediaService.lastError = null;
+          mediaService.resetReacquireGuard();
+          this.notify('state-changed', { micState: 'off', error: null });
         } else if (micStatus.state === 'denied') {
           this.micState = 'blocked';
-          this.notify('state-changed', { micState: 'blocked' });
+          this.error = mediaService.parseMediaError({ name: 'NotAllowedError' }, 'audio');
+          this.notify('state-changed', { micState: 'blocked', error: this.error });
         }
       };
       micStatus.onchange = handleMicChange;
-    } catch {}
+    } catch (err) {
+      logMediaDebug('controller:permission-query-unsupported', { error: err?.message });
+    }
   }
 
   async retryPermission() {

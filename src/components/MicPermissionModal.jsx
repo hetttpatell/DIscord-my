@@ -1,5 +1,5 @@
 import React from 'react';
-import { MicOff, RefreshCw, X } from 'lucide-react';
+import { MicOff, RefreshCw, RotateCcw, X } from 'lucide-react';
 
 /**
  * Microphone Permission & Blocked Guidance Modal
@@ -11,6 +11,12 @@ export default function MicPermissionModal({ isOpen, onClose, onRetry }) {
   const ua = typeof navigator !== 'undefined' ? (navigator.userAgent || '') : '';
   const isIOS = /iPhone|iPad|iPod/i.test(ua);
   const isAndroid = /Android/i.test(ua);
+
+  const handleReload = () => {
+    if (typeof window !== 'undefined') {
+      window.location.reload();
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in select-none">
@@ -31,7 +37,7 @@ export default function MicPermissionModal({ isOpen, onClose, onRetry }) {
         <div>
           <h3 className="font-bold text-base text-white">Microphone Access Needed</h3>
           <p className="text-xs text-white/60 mt-1">
-            Your browser blocked microphone access. Follow these instructions to allow it:
+            If you already allowed permission, tap <strong>Try Again</strong> or <strong>Reload Page</strong> to apply it:
           </p>
         </div>
 
@@ -41,7 +47,7 @@ export default function MicPermissionModal({ isOpen, onClose, onRetry }) {
             <>
               <div className="font-semibold text-[#FF9F1C]">Safari on iOS:</div>
               <ol className="list-decimal list-inside space-y-1 text-white/70">
-                <li>Tap the <strong>aA</strong> or page icon on the left of the URL bar.</li>
+                <li>Tap the <strong>aA</strong> icon on the left of the address bar.</li>
                 <li>Tap <strong>Website Settings</strong>.</li>
                 <li>Set <strong>Microphone</strong> to <strong>Allow</strong>.</li>
                 <li>Or open <strong>Settings &gt; Safari &gt; Microphone</strong>.</li>
@@ -50,10 +56,9 @@ export default function MicPermissionModal({ isOpen, onClose, onRetry }) {
           ) : isAndroid ? (
             <>
               <div className="font-semibold text-[#FF9F1C]">Chrome on Android:</div>
-              <ol className="list-decimal list-inside space-y-1 text-white/70">
-                <li>Tap the <strong>lock/tune</strong> icon on the left of the address bar.</li>
-                <li>Tap <strong>Permissions</strong> (or Site Settings).</li>
-                <li>Toggle <strong>Microphone</strong> to <strong>Allowed</strong>.</li>
+              <ol className="list-decimal list-inside space-y-1.5 text-white/70">
+                <li>Tap the <strong>tune/lock</strong> icon on the left of the address bar &gt; <strong>Permissions</strong> &gt; toggle <strong>Microphone</strong> to <strong>Allowed</strong>.</li>
+                <li>If already allowed, check phone <strong>Settings &gt; Apps &gt; Chrome &gt; Permissions &gt; Microphone &gt; Allow</strong>.</li>
               </ol>
             </>
           ) : (
@@ -62,25 +67,36 @@ export default function MicPermissionModal({ isOpen, onClose, onRetry }) {
               <ol className="list-decimal list-inside space-y-1 text-white/70">
                 <li>Click the <strong>tune/padlock icon</strong> next to the URL in the address bar.</li>
                 <li>Set <strong>Microphone</strong> permission to <strong>Allow</strong>.</li>
-                <li>Reload or click Retry below.</li>
+                <li>Reload or click Try Again below.</li>
               </ol>
             </>
           )}
         </div>
 
-        <div className="flex items-center gap-2 pt-2">
-          <button
-            type="button"
-            onClick={onRetry}
-            className="flex-1 py-2.5 px-4 bg-gradient-to-r from-[#FF9F1C] to-[#FF5A5F] hover:opacity-95 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-lg active:scale-95 transition-all"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Try Again</span>
-          </button>
+        <div className="flex flex-col gap-2 pt-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onRetry}
+              className="flex-1 py-2.5 px-4 bg-gradient-to-r from-[#FF9F1C] to-[#FF5A5F] hover:opacity-95 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-lg active:scale-95 transition-all cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Try Again</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleReload}
+              className="py-2.5 px-3 bg-white/10 hover:bg-white/15 active:scale-95 text-white/90 rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer border border-white/10"
+              title="Reload page to apply newly granted permissions"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reload</span>
+            </button>
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="py-2.5 px-4 bg-white/10 hover:bg-white/15 text-white/70 rounded-xl text-xs font-medium active:scale-95 transition-all"
+            className="w-full py-2 bg-transparent hover:bg-white/5 text-white/50 hover:text-white/80 rounded-xl text-xs font-medium active:scale-95 transition-all cursor-pointer"
           >
             Cancel
           </button>
@@ -89,4 +105,3 @@ export default function MicPermissionModal({ isOpen, onClose, onRetry }) {
     </div>
   );
 }
-

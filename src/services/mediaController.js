@@ -142,11 +142,18 @@ export class MediaController {
         this.consecutiveReacquireFailures = 0;
       } else {
         const lastErrName = mediaService.lastError?.name || '';
-        const isDenied = lastErrName === 'NotAllowedError' || lastErrName === 'PermissionDeniedError' || await mediaService.isPermissionDenied('microphone');
+        const permissionStatus = await mediaService.checkMicPermission();
         const isInsecure = lastErrName === 'InsecureContextError' || !this.isSecureContext;
+
         if (isInsecure) {
           this.micState = 'insecure';
-        } else if (isDenied) {
+        } else if (permissionStatus === 'denied') {
+          // Explicitly blocked in browser site settings
+          this.micState = 'blocked';
+        } else if (permissionStatus === 'granted') {
+          // Permission IS granted in browser; device might be busy, but NOT blocked
+          this.micState = 'off';
+        } else if (lastErrName === 'NotAllowedError' || lastErrName === 'PermissionDeniedError') {
           this.micState = 'blocked';
         } else {
           this.micState = 'error';
@@ -155,11 +162,16 @@ export class MediaController {
       }
     } catch (err) {
       console.error('[media] enableMic error:', err);
-      const isDenied = (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') || await mediaService.isPermissionDenied('microphone');
+      const permissionStatus = await mediaService.checkMicPermission();
       const isInsecure = err?.name === 'InsecureContextError' || !this.isSecureContext;
+
       if (isInsecure) {
         this.micState = 'insecure';
-      } else if (isDenied) {
+      } else if (permissionStatus === 'denied') {
+        this.micState = 'blocked';
+      } else if (permissionStatus === 'granted') {
+        this.micState = 'off';
+      } else if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
         this.micState = 'blocked';
       } else {
         this.micState = 'error';
@@ -361,6 +373,10 @@ export class MediaController {
   async retryPermission() {
     this.resetReacquireGuard();
     this.error = null;
+    this.micState = 'off';
+    mediaService.lastError = null;
+    mediaService.lastGetUserMediaError = null;
+    mediaService.resetReacquireGuard();
     return this.enableMic();
   }
 }

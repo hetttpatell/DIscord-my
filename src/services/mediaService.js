@@ -160,35 +160,19 @@ class MediaService {
       return existing;
     }
 
-    // Audio fallback chain using ideal constraints tailored for mobile phone-call acoustics
+    // Clean, universally supported WebRTC audio constraints.
+    // Avoid non-standard flags or raw numbers that trigger OverconstrainedError on Android HAL.
     const audioTiers = [
-      {
-        audio: {
-          echoCancellation: { ideal: true },
-          noiseSuppression: { ideal: true },
-          autoGainControl: { ideal: true },
-          channelCount: { ideal: 1 },
-          sampleRate: { ideal: 48000 },
-          googEchoCancellation: { ideal: true },
-          googAutoGainControl: { ideal: true },
-          googNoiseSuppression: { ideal: true },
-          googHighpassFilter: { ideal: true },
-          ...(this.selectedMicId ? { deviceId: { ideal: this.selectedMicId } } : {})
-        },
-        video: false
-      },
       {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          channelCount: 1
-        },
-        video: false
+          ...(this.selectedMicId ? { deviceId: { ideal: this.selectedMicId } } : {})
+        }
       },
       {
-        audio: true,
-        video: false
+        audio: true
       }
     ];
 
@@ -203,7 +187,7 @@ class MediaService {
         }
       } catch (err) {
         lastAudioErr = err;
-        console.debug('[MediaService] Audio constraint tier failed, falling back:', err.name);
+        console.warn('[MediaService] Audio constraint tier failed, falling back:', err.name, err.message);
       }
     }
 
@@ -325,7 +309,7 @@ class MediaService {
   }
 
   /**
-   * Listen to browser permission state changes and auto-acquire when granted in settings
+   * Listen to browser permission state changes and reset error state when granted in settings
    */
   async setupPermissionChangeListeners() {
     if (typeof navigator === 'undefined' || !navigator.permissions?.query) return;
@@ -334,17 +318,10 @@ class MediaService {
       const micStatus = await navigator.permissions.query({ name: 'microphone' });
       micStatus.onchange = () => {
         if (micStatus.state === 'granted') {
-          if (this.lastError?.name === 'NotAllowedError' || this.lastError?.type === 'PERMISSION_DENIED') {
-            this.lastError = null;
-          }
-          if (this.lastGetUserMediaError?.name === 'NotAllowedError') {
-            this.lastGetUserMediaError = null;
-          }
+          this.lastError = null;
+          this.lastGetUserMediaError = null;
           this.resetReacquireGuard();
-          if (!this.isMicOn) {
-            console.debug('[MediaService] Microphone permission granted via settings, auto-acquiring...');
-            this.acquireAudioTrack().catch(() => {});
-          }
+          this.notify('permission-granted', { permission: 'granted' });
         }
       };
     } catch {}

@@ -481,8 +481,13 @@ export default function App() {
       } else if (!track && mediaController.micState === 'error' && mediaController.error?.message) {
         showToast(mediaController.error.message);
       }
-    } catch {
-      setIsMicModalOpen(true);
+    } catch (err) {
+      console.error('[App] toggleMic error:', err);
+      if (mediaController.micState === 'blocked') {
+        setIsMicModalOpen(true);
+      } else {
+        showToast(err?.message || 'Unable to access microphone');
+      }
     }
   };
 
@@ -514,7 +519,7 @@ export default function App() {
         onClose={() => setIsMicModalOpen(false)}
         onRetry={async () => {
           setIsMicModalOpen(false);
-          await mediaController.enableMic();
+          await mediaController.retryPermission();
         }}
       />
 

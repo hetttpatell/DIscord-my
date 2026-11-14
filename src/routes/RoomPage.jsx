@@ -6,6 +6,7 @@ import { RoomTopBar } from '../features/room/RoomTopBar';
 import { RoomDock } from '../features/room/RoomDock';
 import { MemberList } from '../features/room/MemberList';
 import { YouTubePlayer } from '../features/player/YouTubePlayer';
+import { YouTubeSearchSheet } from '../features/search/YouTubeSearchSheet';
 import { Sheet } from '../components/Sheet';
 
 export default function RoomPage() {
@@ -114,17 +115,12 @@ export default function RoomPage() {
         </div>
       </Sheet>
 
-      {/* Search Sheet / Panel */}
-      <Sheet
+      {/* YouTube Search Drawer */}
+      <YouTubeSearchSheet
         open={isSearchOpen}
         onOpenChange={setIsSearchOpen}
-        title="Search YouTube"
-        description="Search for videos to play in sync"
-      >
-        <div className="p-4 text-center text-xs text-[#9A978F]">
-          YouTube Search
-        </div>
-      </Sheet>
+        socket={socket}
+      />
 
       {/* Bottom Dock */}
       <RoomDock

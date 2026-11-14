@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { Mic, MicOff, Search, ListMusic, Loader2, PhoneCall, Shield } from 'lucide-react';
+import React from 'react';
+import { Mic, MicOff, Search, ListMusic, Loader2, PhoneCall, PhoneOff, Phone, Shield } from 'lucide-react';
 
 /**
  * VoiceActionBar Component
- * Mobile-centric, professional phone-call interface:
- * - Live in-call status indicator with elapsed call timer
+ * Mobile-centric, professional voice calling interface powered by PeerJS:
+ * - Live in-call status indicator with elapsed call timer (connected state)
+ * - Remote user name display during call
  * - Animated audio waveform visualization when someone is speaking
  * - Large, tactile, thumb-friendly call/mic button with haptic feedback
+ * - Dedicated End Call button when connected
  * - Clear visual states for speaking, live mic, muted, and permission guidance
  */
 export default function VoiceActionBar({
@@ -15,23 +17,22 @@ export default function VoiceActionBar({
   queueCount = 0,
   activeSpeakerName = null,
   peersCount = 0,
+  callState = 'idle',
+  callDuration = 0,
+  remoteUser = null,
   onToggleMic,
+  onEndCall,
+  onAcceptCall,
+  onRejectCall,
   onOpenSearch,
   onToggleQueue,
   isQueueOpen = false
 }) {
   const isMicLive = micState === 'on';
   const isRequesting = micState === 'requesting';
-
-  // In-call duration timer (e.g. 02:45)
-  const [callDuration, setCallDuration] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCallDuration(prev => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+  const isConnected = callState === 'connected';
+  const isCalling = callState === 'calling';
+  const isRinging = callState === 'ringing';
 
   const formatDuration = (secs) => {
     const m = Math.floor(secs / 60);
@@ -52,16 +53,38 @@ export default function VoiceActionBar({
       {/* Top Phone Call Status Banner */}
       <div className="flex items-center justify-between px-1.5 pt-0.5">
         <div className="flex items-center gap-2">
-          {/* Pulsing Call Dot */}
+          {/* Status Dot */}
           <div className="relative flex items-center justify-center">
-            <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full"></span>
-            <span className="absolute w-4 h-4 bg-emerald-500/40 rounded-full animate-ping"></span>
+            <span className={`w-2.5 h-2.5 rounded-full ${
+              isConnected
+                ? 'bg-emerald-500'
+                : isCalling || isRinging
+                  ? 'bg-amber-500'
+                  : 'bg-white/30'
+            }`}></span>
+            {(isConnected || isCalling || isRinging) && (
+              <span className={`absolute w-4 h-4 rounded-full animate-ping ${
+                isConnected ? 'bg-emerald-500/40' : 'bg-amber-500/40'
+              }`}></span>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5 text-xs font-semibold text-white/90">
-            <PhoneCall className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Voice Call</span>
-            <span className="text-white/40 font-mono text-[11px]">({formatDuration(callDuration)})</span>
+            <PhoneCall className={`w-3.5 h-3.5 ${
+              isConnected ? 'text-emerald-400' : isCalling || isRinging ? 'text-amber-400' : 'text-white/40'
+            }`} />
+            {isConnected ? (
+              <>
+                <span className="truncate max-w-[130px]">Call with {remoteUser?.name || 'Member'}</span>
+                <span className="text-white/40 font-mono text-[11px]">({formatDuration(callDuration)})</span>
+              </>
+            ) : isCalling ? (
+              <span className="text-amber-300">Calling {remoteUser?.name || 'Member'}...</span>
+            ) : isRinging ? (
+              <span className="text-emerald-300 font-bold animate-pulse">Call from {remoteUser?.name || 'Member'}!</span>
+            ) : (
+              <span className="text-white/60">Voice Call Ready</span>
+            )}
           </div>
         </div>
 
@@ -88,23 +111,23 @@ export default function VoiceActionBar({
           ) : (
             <div className="flex items-center gap-1 px-2 py-0.5 bg-white/5 border border-white/10 rounded-full text-white/50 text-[10px] font-medium">
               <Shield className="w-3 h-3 text-emerald-400" />
-              <span>HD Voice {peersCount > 0 ? `(${peersCount} peer${peersCount === 1 ? '' : 's'})` : 'Active'}</span>
+              <span>PeerJS HD Voice{peersCount > 0 ? ` (${peersCount})` : ''}</span>
             </div>
           )}
         </div>
       </div>
 
       {/* Main Touch Controls Bar */}
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-2">
         {/* Add Music button */}
         <button
           type="button"
           onClick={onOpenSearch}
-          className="flex-1 min-h-[52px] py-2.5 px-3 bg-white/5 hover:bg-white/10 active:scale-95 text-[#F4F1EA] rounded-2xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 border border-white/10 transition-all cursor-pointer shadow"
+          className="flex-1 min-h-[52px] py-2.5 px-2 sm:px-3 bg-white/5 hover:bg-white/10 active:scale-95 text-[#F4F1EA] rounded-2xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 border border-white/10 transition-all cursor-pointer shadow"
           title="Search & Add Music"
         >
           <Search className="w-4 h-4 text-[#FF9F1C]" />
-          <span className="hidden xs:inline">Add Music</span>
+          <span className="hidden xs:inline">Music</span>
         </button>
 
         {/* Central Prominent Mobile Phone-Call Mic Button */}
@@ -112,7 +135,7 @@ export default function VoiceActionBar({
           type="button"
           disabled={isRequesting}
           onClick={handleMicClick}
-          className={`flex-[1.6] min-h-[54px] px-4 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2.5 transition-all cursor-pointer shadow-xl active:scale-95 ${
+          className={`flex-[1.8] min-h-[54px] px-3 sm:px-4 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xl active:scale-95 ${
             isRequesting
               ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
               : isMicLive && isSpeaking
@@ -172,11 +195,47 @@ export default function VoiceActionBar({
           )}
         </button>
 
+        {/* In-Call Hang Up Button (When connected or calling) */}
+        {(isConnected || isCalling) && (
+          <button
+            type="button"
+            onClick={onEndCall}
+            className="min-h-[52px] px-3.5 py-2.5 rounded-2xl bg-red-500/20 hover:bg-red-500/30 active:scale-95 text-red-400 border border-red-500/40 flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-lg"
+            title={isConnected ? 'End Call' : 'Cancel Call'}
+          >
+            <PhoneOff className="w-4 h-4" />
+            <span className="text-xs font-bold hidden sm:inline">{isConnected ? 'End' : 'Cancel'}</span>
+          </button>
+        )}
+
+        {/* Incoming Call Accept & Decline Quick Actions */}
+        {isRinging && (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onAcceptCall}
+              className="min-h-[52px] px-3 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-white font-bold flex items-center justify-center gap-1 shadow-lg shadow-emerald-500/30 transition-all cursor-pointer"
+              title="Accept Call"
+            >
+              <Phone className="w-4 h-4" />
+              <span className="text-xs font-bold hidden sm:inline">Answer</span>
+            </button>
+            <button
+              type="button"
+              onClick={onRejectCall}
+              className="min-h-[52px] px-3 py-2.5 rounded-2xl bg-red-500/20 hover:bg-red-500/30 active:scale-95 text-red-400 border border-red-500/40 flex items-center justify-center gap-1 transition-all cursor-pointer"
+              title="Decline Call"
+            >
+              <PhoneOff className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Up Next Queue toggle button */}
         <button
           type="button"
           onClick={onToggleQueue}
-          className={`flex-1 min-h-[52px] py-2.5 px-3 rounded-2xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 border transition-all cursor-pointer active:scale-95 ${
+          className={`flex-1 min-h-[52px] py-2.5 px-2 sm:px-3 rounded-2xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 border transition-all cursor-pointer active:scale-95 ${
             isQueueOpen
               ? 'bg-gradient-to-r from-[#FF9F1C] to-[#FF5A5F] text-white border-transparent shadow-lg'
               : 'bg-white/5 hover:bg-white/10 text-white/90 border-white/10'

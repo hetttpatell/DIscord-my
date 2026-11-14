@@ -17,10 +17,10 @@
    - Idempotent queue progression: skip and track-end events use unique `entryId` markers to prevent double-skips under concurrent network requests.
    - Automatic skipping of unplayable videos (player error codes 2, 5, 100, 101, 150) with room toast notifications.
 
-2. **Mic-Only Voice Communication**
+2. **PeerJS 1-to-1 Voice Calling**
    - High-quality audio-only communication (echo cancellation, noise suppression, automatic gain control).
-   - LiveKit SFU as primary engine with automatic fallback to native WebRTC mesh (sendrecv audio transceivers, zero renegotiation needed on mid-call unmute).
-   - Microphone starts OFF by default; acquired via user gesture on first unmute.
+   - Powered by PeerJS with dynamic STUN/TURN ICE configuration via backend API.
+   - Comprehensive call lifecycle: initiate, incoming alert, accept, decline, soft-mute/unmute, and end call.
    - Real-time speaking indicators and persistent audio elements.
    - Automatic music ducking: lowers YouTube player volume to 30% after 250ms of sustained remote speech, restoring volume after 600ms of silence (bypassed on iOS where volume is hardware-restricted).
    - Dual volume sliders for independent "Music" and "Voices" balance.
@@ -40,7 +40,7 @@
 
 - **Frontend**: React 19, Vite 8, Tailwind CSS v4, Lucide Icons.
 - **Backend**: Node.js, Express 5, Socket.IO 4, ioredis.
-- **Voice Engine**: LiveKit Client / Server SDK + Native WebRTC Mesh (STUN/TURN).
+- **Voice Engine**: PeerJS (`peerjs`) + Native WebRTC + Dynamic STUN/TURN Relays.
 - **Tooling**: Oxlint, Node Test Runner (`node:test`).
 
 ---
@@ -54,10 +54,6 @@ Copy `.env.example` to `.env` to configure your environment. **Never commit `.en
 | `PORT` | Local backend server port (default: 3001). |
 | `VITE_BACKEND_URL` | Production backend URL for frontend requests. |
 | `YOUTUBE_API_KEY` | Google YouTube Data API v3 key for catalog search. |
-| `LIVEKIT_URL` | LiveKit SFU WebSocket URL (e.g. `wss://your-project.livekit.cloud`). |
-| `LIVEKIT_API_KEY` | LiveKit API Key. |
-| `LIVEKIT_API_SECRET` | LiveKit API Secret. |
-| `VITE_LIVEKIT_URL` | Optional frontend fallback URL for LiveKit WebSocket. |
 | `STUN_SERVERS` | Comma-separated list of custom STUN servers. |
 | `METERED_API_KEY` | Optional Metered.ca TURN relay API key. |
 | `METERED_APP_DOMAIN` | Optional Metered.ca app domain. |

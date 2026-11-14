@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import mediaService from '../services/mediaService';
 import mediaController from '../services/mediaController';
-import peerConnectionService from '../services/peerConnectionService';
-import livekitService from '../services/livekitService';
+import peerService from '../services/peerService';
 
 export default function MediaDebugPanel() {
   const [isVisible] = useState(() => {
@@ -54,12 +53,7 @@ export default function MediaDebugPanel() {
         };
       });
 
-      let webrtcInfo = null;
-      if (livekitService.isConnected) {
-        webrtcInfo = livekitService.getDiagnostics();
-      } else {
-        webrtcInfo = peerConnectionService.getDiagnostics();
-      }
+      const webrtcInfo = peerService.getDiagnostics();
 
       if (mounted) {
         setDebugState({
@@ -151,95 +145,18 @@ export default function MediaDebugPanel() {
           )}
         </div>
 
-        {/* WebRTC Diagnostics */}
+        {/* Voice Engine Diagnostics */}
         <div>
           <div className="text-gray-400 uppercase text-[9px] font-bold">Voice Engine Path</div>
           {debugState.webrtcInfo ? (
-            <div>
-              <div>Engine: <span className="text-yellow-300 font-bold">{debugState.webrtcInfo.engine}</span></div>
-              {debugState.webrtcInfo.engine === 'livekit' ? (
-                <div>
-                  <div>State: {debugState.webrtcInfo.connectionState}</div>
-                  <div>Publications: {debugState.webrtcInfo.senders?.length || 0}</div>
-                  {debugState.webrtcInfo.senders?.map((s, idx) => (
-                    <div key={idx} className="text-[9px] text-gray-300 pl-2">
-                      • {s.kind} ({s.source}): muted={String(s.isMuted)}, readyState={s.readyState}
-                    </div>
-                  ))}
-                  {debugState.webrtcInfo.diagnostics?.lastAction && (
-                    <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
-                      <div className="text-gray-400">Last Action:</div>
-                      <div>method: {debugState.webrtcInfo.diagnostics.lastAction.method}</div>
-                      <div>kind: {debugState.webrtcInfo.diagnostics.lastAction.trackKind}</div>
-                      <div className="text-gray-400">{debugState.webrtcInfo.diagnostics.lastAction.timestamp}</div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div>
-                  <div>Peers: {debugState.webrtcInfo.connections?.length || 0}</div>
-                  {debugState.webrtcInfo.iceFetchError && (
-                    <div className="p-1 my-1 bg-red-950/60 border border-red-500/40 rounded text-red-300 text-[10px]">
-                      ⚠️ ICE Fetch Failed: {debugState.webrtcInfo.iceFetchError} (Using STUN fallback)
-                    </div>
-                  )}
-                  {debugState.webrtcInfo.connections?.map(c => (
-                    <div key={c.peerId} className="p-1 my-1 bg-white/5 rounded border border-white/10">
-                      <div className="text-white text-[10px] truncate font-bold">{c.peerId}</div>
-                      <div>conn: <span className="text-white">{c.connectionState}</span> | ice: <span className="text-white">{c.iceConnectionState}</span> (gather: {c.iceGatheringState})</div>
-                      <div>
-                        selected pair: <span className={`px-1 py-0.5 rounded font-bold uppercase text-[9px] ${
-                          c.selectedCandidatePairType === 'relay'
-                            ? 'bg-green-500/20 text-green-300 border border-green-500/30'
-                            : c.selectedCandidatePairType === 'srflx'
-                              ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
-                              : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                        }`}>{c.selectedCandidatePairType || 'none'}</span>
-                        {c.selectedPairDetails && <span className="text-[9px] text-gray-400 ml-1">({c.selectedPairDetails})</span>}
-                      </div>
-                      <div className="text-[10px] text-gray-300">
-                        candidates: <span className={c.candidateTypes?.includes('relay') ? 'text-green-300' : 'text-yellow-400'}>
-                          {c.candidateTypes?.length ? c.candidateTypes.join(', ') : 'gathering...'}
-                        </span>
-                      </div>
-                      {c.troubleConnecting && (
-                        <div className="text-[10px] text-red-400 font-bold">⚠️ Connection trouble (&gt;10s in checking/failed)</div>
-                      )}
-                      <div>signaling: {c.signalingState} | polite: {String(c.polite)}</div>
-                      <div className="text-[9px] text-gray-300 mt-1">
-                        <div className="font-semibold text-gray-400">Audio Transceivers ({c.transceivers?.length || 0}):</div>
-                        {c.transceivers?.map((t, idx) => (
-                          <div key={idx} className="pl-1">
-                            mid={t.mid ?? 'null'}: {t.direction} (curr: {t.currentDirection || 'none'}) | sender: {t.senderTrackKind || 'none'}[{t.senderTrackReadyState || 'none'}] en={String(t.senderTrackEnabled)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                  {debugState.webrtcInfo.diagnostics?.lastToggle && (
-                    <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
-                      <div className="text-gray-400">Last Mesh Audio Toggle:</div>
-                      <div>audio: {debugState.webrtcInfo.diagnostics.lastToggle.audioTrackKind || 'none'} [{debugState.webrtcInfo.diagnostics.lastToggle.audioTrackReadyState || 'none'}]</div>
-                      <div>peers: {debugState.webrtcInfo.diagnostics.lastToggle.peers?.length || 0}</div>
-                    </div>
-                  )}
-                  {debugState.webrtcInfo.diagnostics?.lastMediaStateSent && (
-                    <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
-                      <div className="text-gray-400">Last webrtc:media-state Sent:</div>
-                      <div>{JSON.stringify(debugState.webrtcInfo.diagnostics.lastMediaStateSent.payload)}</div>
-                      <div className="text-gray-500 text-[9px]">{debugState.webrtcInfo.diagnostics.lastMediaStateSent.timestamp}</div>
-                    </div>
-                  )}
-                  {debugState.webrtcInfo.diagnostics?.lastMediaStateReceived && (
-                    <div className="p-1 my-1 bg-white/5 rounded text-[10px]">
-                      <div className="text-gray-400">Last webrtc:media-state Received:</div>
-                      <div>from: {debugState.webrtcInfo.diagnostics.lastMediaStateReceived.from}</div>
-                      <div>{JSON.stringify(debugState.webrtcInfo.diagnostics.lastMediaStateReceived.payload)}</div>
-                      <div className="text-gray-500 text-[9px]">{debugState.webrtcInfo.diagnostics.lastMediaStateReceived.timestamp}</div>
-                    </div>
-                  )}
-                </div>
-              )}
+            <div className="space-y-1 text-[10px]">
+              <div>Engine: <span className="text-yellow-300 font-bold">PeerJS (1-to-1 WebRTC)</span></div>
+              <div>Peer ID: <span className="text-white font-mono">{debugState.webrtcInfo.peerId || 'connecting...'}</span></div>
+              <div>Ready: <span className={debugState.webrtcInfo.isReady ? 'text-green-300' : 'text-amber-400'}>{String(debugState.webrtcInfo.isReady)}</span></div>
+              <div>Call State: <span className="text-emerald-400 font-bold uppercase">{debugState.webrtcInfo.callState}</span></div>
+              <div>Remote User: <span className="text-white">{debugState.webrtcInfo.remoteUser || 'None'}</span></div>
+              <div>Remote Speaking: <span className={debugState.webrtcInfo.isRemoteSpeaking ? 'text-green-300 font-bold' : 'text-gray-400'}>{String(debugState.webrtcInfo.isRemoteSpeaking)}</span></div>
+              <div>AudioContext: <span className="text-gray-300">{debugState.webrtcInfo.audioContextState}</span></div>
             </div>
           ) : (
             <div className="text-gray-500 italic">Not connected to call</div>

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
 import socket from '../services/socket';
-import peerConnectionService from '../services/peerConnectionService';
-import livekitService from '../services/livekitService';
+import peerService from '../services/peerService';
 import { VolumeX, Play } from 'lucide-react';
 
 /**
@@ -352,7 +351,7 @@ const YouTubePlayer = forwardRef(function YouTubePlayer({
     if (isIOS) return;
 
     const checkSpeakingAndDuck = () => {
-      const allPeers = { ...peerConnectionService.getAllPeers(), ...livekitService.getAllPeers() };
+      const allPeers = peerService.getAllPeers();
       const isRemoteSpeaking = Object.values(allPeers).some(p => Boolean(p.isSpeaking && !p.isMuted));
 
       if (isRemoteSpeaking) {
@@ -382,14 +381,12 @@ const YouTubePlayer = forwardRef(function YouTubePlayer({
       }
     };
 
-    const unsubWebRTC = peerConnectionService.subscribe(checkSpeakingAndDuck);
-    const unsubLiveKit = livekitService.subscribe(checkSpeakingAndDuck);
+    const unsubPeer = peerService.subscribe(checkSpeakingAndDuck);
 
     return () => {
       if (duckingSustainTimer.current) clearTimeout(duckingSustainTimer.current);
       if (duckingReleaseTimer.current) clearTimeout(duckingReleaseTimer.current);
-      unsubWebRTC();
-      unsubLiveKit();
+      unsubPeer();
     };
   }, [applyPlayerVolume]);
 

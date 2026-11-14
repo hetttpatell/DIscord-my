@@ -2,9 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import socket from './services/socket';
 import { getClientId } from './services/clientId';
 import mediaController from './services/mediaController';
-import peerConnectionService from './services/peerConnectionService';
-import livekitService from './services/livekitService';
-import { useWebRTC } from './hooks/useWebRTC';
+import peerService from './services/peerService';
+import { useVoiceCall } from './hooks/useVoiceCall';
 import YouTubePlayer from './components/YouTubePlayer';
 import YouTubeSearchSheet from './components/YouTubeSearchSheet';
 import YouTubeQueue from './components/YouTubeQueue';
@@ -13,6 +12,7 @@ import AudioControls from './components/AudioControls';
 import RoomTopBar from './components/RoomTopBar';
 import PlaybackOverlay from './components/PlaybackOverlay';
 import VoiceActionBar from './components/VoiceActionBar';
+import CallModal from './components/CallModal';
 import LandingAccessCard from './components/LandingAccessCard';
 import StartListeningGate from './components/StartListeningGate';
 import MicPermissionModal from './components/MicPermissionModal';
@@ -103,14 +103,31 @@ export default function App() {
     }, 3000);
   }, []);
 
-  // WebRTC Audio Connection
-  const { peers } = useWebRTC({
+  // PeerJS Voice Call Hook
+  const voiceCall = useVoiceCall({
     roomId: room?.id,
-    userName: currentUser?.name,
-    sessionId: getClientId(),
-    localStream: mediaController.stream,
-    isCallActive: Boolean(room)
+    currentUser,
+    voicesVolume
   });
+
+  const peers = voiceCall.remoteUser ? {
+    [voiceCall.remoteUser.clientId || voiceCall.remoteUser.id]: {
+      ...voiceCall.remoteUser,
+      peerId: voiceCall.remoteUser.clientId || voiceCall.remoteUser.id,
+      userName: voiceCall.remoteUser.name
+    }
+  } : {};
+
+  const prevVoiceErrorRef = useRef(null);
+  useEffect(() => {
+    if (voiceCall.error?.message && voiceCall.error !== prevVoiceErrorRef.current) {
+      prevVoiceErrorRef.current = voiceCall.error;
+      const t = setTimeout(() => {
+        showToast(voiceCall.error.message);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+  }, [voiceCall.error, showToast]);
 
   // Track mic changes & permission status
   useEffect(() => {
@@ -304,8 +321,7 @@ export default function App() {
   const handleStartListening = async () => {
     try {
       youtubePlayerRef.current?.unmuteAndPlay();
-      await peerConnectionService.unlockAudio();
-      await livekitService.startAudio();
+      await peerService.unlockAudio();
       document.querySelectorAll('audio').forEach(a => {
         if (a.paused && a.srcObject) a.play().catch(() => {});
       });
@@ -377,6 +393,7 @@ export default function App() {
 
   const handleLeave = () => {
     mediaController.cleanupOnLeaveRoom();
+    peerService.destroy();
     socket.emit('room:leave');
     try {
       sessionStorage.removeItem('afterspot_activeSession');
@@ -473,6 +490,10 @@ export default function App() {
 
   const handleToggleMic = async () => {
     try {
+      if (voiceCall.callState === 'connected') {
+        await voiceCall.toggleMute();
+        return;
+      }
       const track = await mediaController.toggleMic();
       if (!track && mediaController.micState === 'blocked') {
         setIsMicModalOpen(true);
@@ -521,6 +542,15 @@ export default function App() {
           setIsMicModalOpen(false);
           await mediaController.retryPermission();
         }}
+      />
+
+      {/* 1-to-1 Voice Call Alert Modal (Incoming / Outgoing) */}
+      <CallModal
+        callState={voiceCall.callState}
+        remoteUser={voiceCall.remoteUser}
+        onAccept={voiceCall.acceptCall}
+        onReject={voiceCall.rejectCall}
+        onCancel={voiceCall.endCall}
       />
 
       {/* YouTube Search Sheet (Touch-friendly & Visual Viewport Adapted) */}
@@ -613,7 +643,13 @@ export default function App() {
                 queueCount={queue.length}
                 activeSpeakerName={activeSpeakerName}
                 peersCount={Object.keys(peers).length}
+                callState={voiceCall.callState}
+                callDuration={voiceCall.callDuration}
+                remoteUser={voiceCall.remoteUser}
                 onToggleMic={handleToggleMic}
+                onEndCall={voiceCall.endCall}
+                onAcceptCall={voiceCall.acceptCall}
+                onRejectCall={voiceCall.rejectCall}
                 onOpenSearch={() => setIsSearchOpen(true)}
                 onToggleQueue={() => setIsQueueOpen(prev => !prev)}
                 isQueueOpen={isQueueOpen}
@@ -626,6 +662,10 @@ export default function App() {
                 currentUserId={currentUser?.clientId || getClientId()}
                 localMicOn={micState === 'on'}
                 localSpeaking={isSpeaking}
+                callState={voiceCall.callState}
+                activeCallUser={voiceCall.remoteUser}
+                onStartCall={voiceCall.startCall}
+                onEndCall={voiceCall.endCall}
               />
 
               {/* Audio Balance Dual Sliders */}

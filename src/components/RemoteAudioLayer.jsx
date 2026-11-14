@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import peerConnectionService from '../services/peerConnectionService';
-import livekitService from '../services/livekitService';
+import peerService from '../services/peerService';
 import mediaService from '../services/mediaService';
 import AudioUnlockBanner from './AudioUnlockBanner';
 
@@ -172,41 +171,19 @@ function RemoteAudioItem({ peer, voicesVolume = 100, onAutoplayBlocked }) {
 export default function RemoteAudioLayer({ voicesVolume = 100 }) {
   const [peers, setPeers] = useState({});
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
-  const webrtcPeersRef = useRef({});
-  const livekitPeersRef = useRef({});
 
-  const updateCombinedPeers = useCallback(() => {
-    setPeers({ ...webrtcPeersRef.current, ...livekitPeersRef.current });
-  }, []);
-
-  // Subscribe to both WebRTC and LiveKit peer updates
+  // Subscribe to PeerJS peer updates
   useEffect(() => {
-    const unsubWebRTC = peerConnectionService.subscribe((event, payload) => {
+    const unsub = peerService.subscribe((event, payload) => {
       if (event === 'peers-updated') {
-        webrtcPeersRef.current = payload || {};
-        updateCombinedPeers();
-      } else if (event === 'remote-track') {
-        // Force refresh on new remote track arrival
-        updateCombinedPeers();
+        setPeers(payload || {});
       } else if (event === 'autoplay-changed') {
         setAutoplayBlocked(Boolean(payload));
       }
     });
 
-    const unsubLiveKit = livekitService.subscribe((event, payload) => {
-      if (event === 'peers-updated') {
-        livekitPeersRef.current = payload || {};
-        updateCombinedPeers();
-      } else if (event === 'autoplay-changed') {
-        setAutoplayBlocked(Boolean(payload));
-      }
-    });
-
-    return () => {
-      unsubWebRTC();
-      unsubLiveKit();
-    };
-  }, [updateCombinedPeers]);
+    return () => unsub();
+  }, []);
 
   const handleUnlockAudio = useCallback(async () => {
     try {
@@ -214,8 +191,7 @@ export default function RemoteAudioLayer({ voicesVolume = 100 }) {
       if (ctx && ctx.state === 'suspended') {
         await ctx.resume().catch(() => {});
       }
-      await peerConnectionService.unlockAudio();
-      await livekitService.startAudio();
+      await peerService.unlockAudio();
       document.querySelectorAll('audio').forEach(a => {
         if (a.paused && a.srcObject) {
           a.play().catch(() => {});

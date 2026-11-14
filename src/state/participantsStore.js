@@ -12,8 +12,7 @@
 import { useSyncExternalStore, useCallback } from 'react';
 import socket from '../services/socket.js';
 import mediaController from '../services/mediaController.js';
-import livekitService from '../services/livekitService.js';
-import peerConnectionService from '../services/peerConnectionService.js';
+import peerService from '../services/peerService.js';
 
 export function normalizeQuality(q) {
   if (q === 'good' || q === 'poor') return q;
@@ -492,13 +491,7 @@ class ParticipantsStore {
       this.reportSpeechActivity(local.id, isSpeaking);
     });
 
-    livekitService.subscribe((event, payload) => {
-      if (event === 'peers-updated') {
-        this.syncPeers(payload || {});
-      }
-    });
-
-    peerConnectionService.subscribe((event, payload) => {
+    peerService.subscribe((event, payload) => {
       if (event === 'peers-updated') {
         this.syncPeers(payload || {});
       }

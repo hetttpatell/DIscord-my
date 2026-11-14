@@ -51,3 +51,15 @@ All notable improvements, architectural simplifications, and redesigns applied t
 - **Zero Warnings/Errors**: Oxlint clean (0 warnings, 0 errors), Vite production build clean, 21 unit tests passing across all test suites.
 - **Deleted Feature Purge**: Removed all dead code, unused socket events, unused variables, and deprecated feature references.
 - **Documentation**: Overhauled `README.md` and `CHANGELOG.md` with up-to-date specifications and manual verification checklists.
+
+### Phase 7: Voice Calling Overhaul with PeerJS
+- **Dependency Migration**: Removed `livekit-client` and `livekit-server-sdk`. Installed `peerjs`. Removed `src/services/livekitService.js`, `src/services/peerConnectionService.js`, and `src/hooks/useWebRTC.js`.
+- **PeerJS Service (`src/services/peerService.js`)**: Implemented unified 1-to-1 voice calling service utilizing PeerJS with dynamic backend STUN/TURN ICE configuration (`/api/webrtc/ice-config`).
+- **Call Controls & States**: Complete support for `idle`, `calling`, `ringing`, `connected`, `disconnected`, and `error` states. Full call actions: Start call, Accept call, Reject call, Soft-mute/unmute, and End call.
+- **Microphone & Permission Handling**: W3C-standard audio constraints (`echoCancellation`, `noiseSuppression`, `autoGainControl`) with fallback to `{ audio: true }`. Informative `MicPermissionModal` for user permission resolution.
+- **Audio Routing & Speech Ducking**: Dual Web Audio API `AudioContext` GainNode routing + background HTML `<audio>` elements for reliable playback across mobile Safari & Android Chrome. Web Audio `AnalyserNode` drives real-time speech detection and automated YouTube music ducking.
+- **UI Components**:
+  - `CallModal.jsx`: Prominent mobile-first dialog for incoming (Accept/Decline) and outgoing (Cancel) calls with caller avatars and ambient glows.
+  - `VoiceActionBar.jsx`: Displays call status, elapsed call duration timer, speaking waveforms, instant mute/unmute, and dedicated End Call button.
+  - `MembersStrip.jsx`: Inline Call and End Call controls on member chips with active call partner indicators.
+- **Verification**: 27/27 automated unit tests passing (`peerService.test.js`, `participantsStore.test.js`, `roomModel.test.js`, `youtubeSearch.test.js`), 0 lint warnings/errors, clean Vite build.

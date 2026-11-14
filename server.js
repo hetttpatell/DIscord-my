@@ -6,7 +6,6 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { AccessToken } from 'livekit-server-sdk';
 import { getIceServerConfig, getTurnProviderStatus } from './server/iceConfig.js';
 import { roomStore, hashPassword, verifyPassword } from './server/roomStore.js';
 import { advanceQueue } from './server/queue.js';
@@ -109,58 +108,6 @@ const handleIceConfig = async (req, res) => {
 };
 app.get('/api/webrtc/ice-servers', handleIceConfig);
 app.get('/api/webrtc/ice-config', handleIceConfig);
-
-// LiveKit SFU Access Token Endpoint (Generates short-lived JWT token)
-app.post('/api/livekit/token', async (req, res) => {
-  const { roomId, userName, sessionId } = req.body || {};
-
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
-  const livekitUrl = process.env.LIVEKIT_URL;
-
-  if (!apiKey || !apiSecret || !livekitUrl) {
-    return res.json({
-      enabled: false,
-      reason: 'missing credentials',
-      message: 'LiveKit server credentials not configured in .env. Falling back to native WebRTC engine.'
-    });
-  }
-
-  if (!roomId || !userName) {
-    return res.status(400).json({ error: 'roomId and userName are required' });
-  }
-
-  try {
-    const identity = sessionId || `user-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    const at = new AccessToken(apiKey, apiSecret, {
-      identity,
-      name: userName,
-      ttl: '4h'
-    });
-
-    at.addGrant({
-      room: roomId.toUpperCase(),
-      roomJoin: true,
-      canPublish: true,
-      canSubscribe: true,
-      canPublishData: true
-    });
-
-    const token = await at.toJwt();
-
-    res.json({
-      enabled: true,
-      token,
-      url: livekitUrl
-    });
-  } catch (err) {
-    console.error('[LiveKit] Token generation error:', err);
-    res.status(500).json({
-      enabled: false,
-      error: err.message
-    });
-  }
-});
 
 // Check room existence and password requirement
 app.get('/api/room/:roomId/check', (req, res) => {
@@ -986,11 +933,10 @@ if (isNaN(PORT) || PORT <= 0 || PORT > 65535) {
 
 httpServer.listen(PORT, () => {
   console.log(`afterspot server listening on http://localhost:${PORT}`);
-  const hasLiveKit = Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
   const turnStatus = getTurnProviderStatus();
   const hasYouTube = Boolean(process.env.YOUTUBE_API_KEY);
 
-  console.log(`[Services] LiveKit SFU: ${hasLiveKit ? 'Configured (Active)' : 'Not set (Native WebRTC Mesh active)'}`);
+  console.log('[Services] Voice Engine: PeerJS / WebRTC Active');
   if (turnStatus.configured) {
     console.log(`TURN: configured (provider ${turnStatus.provider})`);
   } else {

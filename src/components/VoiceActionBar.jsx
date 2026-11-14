@@ -43,10 +43,12 @@ export default function VoiceActionBar({
             : isMicLive && isSpeaking
               ? 'bg-gradient-to-r from-[#FF9F1C] to-[#FF5A5F] text-white ring-4 ring-[#FF9F1C]/40 animate-pulse shadow-[#FF5A5F]/30'
               : isMicLive
-                ? 'bg-[#2EC4B6]/20 text-[#2EC4B6] border border-[#2EC4B6]/40'
+                ? 'bg-[#2EC4B6]/20 text-[#2EC4B6] border border-[#2EC4B6]/40 shadow-[#2EC4B6]/10'
                 : micState === 'soft-muted'
                   ? 'bg-red-500/15 text-red-300 border border-red-500/30'
-                  : 'bg-white/10 text-white/70 hover:bg-white/15 border border-white/10'
+                  : micState === 'blocked' || micState === 'insecure'
+                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25'
+                    : 'bg-white/10 text-white/70 hover:bg-white/15 border border-white/10'
         }`}
         aria-label="Toggle microphone"
       >
@@ -59,6 +61,16 @@ export default function VoiceActionBar({
           <>
             <Mic className={`w-4 h-4 ${isSpeaking ? 'animate-bounce text-white' : 'text-[#2EC4B6]'}`} />
             <span>{isSpeaking ? 'Speaking' : 'Mic ON'}</span>
+          </>
+        ) : micState === 'blocked' ? (
+          <>
+            <MicOff className="w-4 h-4 text-amber-400" />
+            <span>Fix Mic</span>
+          </>
+        ) : micState === 'insecure' ? (
+          <>
+            <MicOff className="w-4 h-4 text-amber-400" />
+            <span>Need HTTPS</span>
           </>
         ) : (
           <>

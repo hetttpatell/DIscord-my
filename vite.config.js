@@ -7,12 +7,13 @@ import basicSsl from '@vitejs/plugin-basic-ssl'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const backendUrl = env.BACKEND_URL || env.VITE_BACKEND_URL || process.env.BACKEND_URL || process.env.VITE_BACKEND_URL || '';
+  const enableSsl = env.HTTPS === 'true' || process.env.HTTPS === 'true';
 
   return {
     plugins: [
       react(),
       tailwindcss(),
-      basicSsl()
+      ...(enableSsl ? [basicSsl()] : [])
     ],
     define: {
       'import.meta.env.BACKEND_URL': JSON.stringify(backendUrl),

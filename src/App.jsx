@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import socket from './services/socket';
 import { getClientId } from './services/clientId';
 import mediaController from './services/mediaController';
@@ -28,12 +28,16 @@ export default function App() {
   const [queue, setQueue] = useState([]);
   const [currentTrack, setCurrentTrack] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackPosition, setPlaybackPosition] = useState(0);
+  const [playbackPosition, setPlaybackPosition] = useState(0); // Synchronized room position
+  const [localCurrentTime, setLocalCurrentTime] = useState(0); // Smooth local UI position
   const [duration, setDuration] = useState(0);
+
+  const youtubePlayerRef = useRef(null);
 
   // Audio & Voice States
   const [micState, setMicState] = useState(() => mediaController.micState);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isMusicMuted, setIsMusicMuted] = useState(false);
   const [musicVolume, setMusicVolume] = useState(() => {
     if (typeof window === 'undefined') return 80;
     try {
@@ -100,7 +104,7 @@ export default function App() {
   }, []);
 
   // WebRTC Audio Connection
-  useWebRTC({
+  const { peers } = useWebRTC({
     roomId: room?.id,
     userName: currentUser?.name,
     sessionId: getClientId(),
@@ -117,18 +121,24 @@ export default function App() {
         setIsSpeaking(Boolean(current.isSpeaking));
         if (current.micState === 'blocked') {
           setIsMicModalOpen(true);
+        } else if (current.micState === 'insecure') {
+          showToast('Microphone requires HTTPS or localhost');
+        } else if (current.micState === 'error' && current.error?.message) {
+          showToast(current.error.message);
         }
       }
     });
     return () => unsub();
-  }, []);
+  }, [showToast]);
 
   const handleRoomJoined = useCallback((roomData, userData, resumeToken = null, plainPassword = null) => {
     setRoom(roomData);
     setCurrentUser(userData);
     setCurrentTrack(roomData.currentTrack || null);
     setIsPlaying(Boolean(roomData.isPlaying));
-    setPlaybackPosition(roomData.playbackPosition || 0);
+    const startPos = roomData.playbackPosition || 0;
+    setPlaybackPosition(startPos);
+    setLocalCurrentTime(startPos);
     setMembers(roomData.members || []);
     setQueue(roomData.queue || []);
     setErrorMsg('');
@@ -205,22 +215,32 @@ export default function App() {
   useEffect(() => {
     const onPlayerSync = ({ isPlaying: p, playbackPosition: pos }) => {
       setIsPlaying(p);
-      if (typeof pos === 'number') setPlaybackPosition(pos);
+      if (typeof pos === 'number') {
+        setPlaybackPosition(pos);
+        setLocalCurrentTime(pos);
+      }
     };
 
     const onTrackChange = ({ currentTrack: t, isPlaying: p, playbackPosition: pos }) => {
       setCurrentTrack(t);
       setIsPlaying(Boolean(p));
-      setPlaybackPosition(pos || 0);
+      const startingPos = typeof pos === 'number' ? pos : 0;
+      setPlaybackPosition(startingPos);
+      setLocalCurrentTime(startingPos);
       if (t) showToast(`Now playing: ${t.title}`);
     };
 
     const onSeek = ({ playbackPosition: pos }) => {
-      if (typeof pos === 'number') setPlaybackPosition(pos);
+      if (typeof pos === 'number') {
+        setPlaybackPosition(pos);
+        setLocalCurrentTime(pos);
+      }
     };
 
     const onTimeSync = ({ playbackPosition: pos, isPlaying: p }) => {
-      if (typeof pos === 'number') setPlaybackPosition(pos);
+      if (typeof pos === 'number') {
+        setPlaybackPosition(pos);
+      }
       setIsPlaying(p);
     };
 
@@ -283,13 +303,14 @@ export default function App() {
 
   const handleStartListening = async () => {
     try {
+      youtubePlayerRef.current?.unmuteAndPlay();
       await peerConnectionService.unlockAudio();
       await livekitService.startAudio();
       document.querySelectorAll('audio').forEach(a => {
         if (a.paused && a.srcObject) a.play().catch(() => {});
       });
       setHasAudioUnlocked(true);
-      showToast('Audio unlocked!');
+      showToast('Audio & Voice unlocked!');
     } catch {
       setHasAudioUnlocked(true);
     }
@@ -399,7 +420,14 @@ export default function App() {
 
   const handleTogglePlay = () => {
     if (!room) return;
-    socket.emit('player:sync', { isPlaying: !isPlaying, playbackPosition });
+    const nextPlaying = !isPlaying;
+    setIsPlaying(nextPlaying);
+    if (nextPlaying) {
+      socket.emit('player:play', { currentTime: localCurrentTime });
+    } else {
+      socket.emit('player:pause', { currentTime: localCurrentTime });
+    }
+    socket.emit('player:sync', { isPlaying: nextPlaying, playbackPosition: localCurrentTime });
   };
 
   const handleSkip = () => {
@@ -409,7 +437,18 @@ export default function App() {
 
   const handleSeek = (pos) => {
     setPlaybackPosition(pos);
+    setLocalCurrentTime(pos);
     socket.emit('player:seek', { currentTime: pos });
+  };
+
+  const handleToggleMute = () => {
+    setIsMusicMuted(prev => {
+      const next = !prev;
+      if (!next) {
+        youtubePlayerRef.current?.unmute();
+      }
+      return next;
+    });
   };
 
   const handlePlayNow = (track) => {
@@ -434,7 +473,14 @@ export default function App() {
 
   const handleToggleMic = async () => {
     try {
-      await mediaController.toggleMic();
+      const track = await mediaController.toggleMic();
+      if (!track && mediaController.micState === 'blocked') {
+        setIsMicModalOpen(true);
+      } else if (!track && mediaController.micState === 'insecure') {
+        showToast('Microphone requires HTTPS or localhost');
+      } else if (!track && mediaController.micState === 'error' && mediaController.error?.message) {
+        showToast(mediaController.error.message);
+      }
     } catch {
       setIsMicModalOpen(true);
     }
@@ -497,25 +543,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Permanent YouTube Player Container - Rule 4: never unmounts, never display:none */}
-      <div className={`transition-all duration-300 ${
-        isRoomActive && currentTrack
-          ? 'w-full max-w-2xl mx-auto aspect-video min-h-[200px] p-3 sm:p-4'
-          : 'fixed -top-[9999px] -left-[9999px] w-[320px] h-[180px] opacity-0 pointer-events-none'
-      }`}>
-        <YouTubePlayer
-          currentTrack={currentTrack}
-          isPlaying={isPlaying}
-          playbackPosition={playbackPosition}
-          volume={musicVolume}
-          isMuted={false}
-          onDurationChange={(d) => setDuration(d)}
-          onCurrentTimeChange={(pos) => setPlaybackPosition(pos)}
-          onPlayerError={(msg) => showToast(msg || "That video can't be played here, skipped")}
-          onTapToPlayNeeded={() => showToast('Tap player to resume playback')}
-        />
-      </div>
-
       {/* Main View Area */}
       {isRoomActive ? (
         <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -536,15 +563,39 @@ export default function App() {
             <div className="w-full max-w-2xl mx-auto space-y-4">
               <HeadphoneTip />
 
+              {/* Permanent YouTube Player Stage - Rule 4: never unmounts, never display:none */}
+              <div className={`transition-all duration-300 ${
+                currentTrack
+                  ? 'w-full aspect-video min-h-[200px] rounded-2xl overflow-hidden shadow-2xl bg-black border border-white/10'
+                  : 'fixed -top-[9999px] -left-[9999px] w-[320px] h-[180px] opacity-0 pointer-events-none'
+              }`}>
+                <YouTubePlayer
+                  ref={youtubePlayerRef}
+                  currentTrack={currentTrack}
+                  isPlaying={isPlaying}
+                  playbackPosition={playbackPosition}
+                  volume={musicVolume}
+                  isMuted={isMusicMuted}
+                  onDurationChange={(d) => setDuration(d)}
+                  onCurrentTimeChange={(pos) => setLocalCurrentTime(pos)}
+                  onPlayerError={(msg) => showToast(msg || "That video can't be played here, skipped")}
+                  onTapToPlayNeeded={() => showToast('Tap player to start sound')}
+                  onTogglePlay={handleTogglePlay}
+                />
+              </div>
+
               {/* Minimalist Playback Overlay with scrub */}
               <PlaybackOverlay
                 currentTrack={currentTrack}
                 isPlaying={isPlaying}
-                playbackPosition={playbackPosition}
+                playbackPosition={localCurrentTime}
                 duration={duration}
+                isMuted={isMusicMuted}
                 onTogglePlay={handleTogglePlay}
                 onSkip={handleSkip}
                 onSeek={handleSeek}
+                onToggleMute={handleToggleMute}
+                onOpenSearch={() => setIsSearchOpen(true)}
               />
 
               {/* Voice Action Bar: prominent mic toggle, search button, queue toggle */}
@@ -561,6 +612,7 @@ export default function App() {
               {/* Members Strip */}
               <MembersStrip
                 members={members}
+                peers={peers}
                 currentUserId={currentUser?.clientId || getClientId()}
                 localMicOn={micState === 'on'}
                 localSpeaking={isSpeaking}

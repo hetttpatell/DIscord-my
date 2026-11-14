@@ -8,6 +8,7 @@ import { MicOff, Mic, Crown } from 'lucide-react';
  */
 export default function MembersStrip({
   members = [],
+  peers = {},
   currentUserId = null,
   activeSpeakerId = null,
   localMicOn = false,
@@ -23,8 +24,15 @@ export default function MembersStrip({
       <div className="flex items-center gap-2.5 overflow-x-auto overscroll-contain py-1 pr-1 scrollbar-none">
         {members.map((m) => {
           const isMe = m.clientId === currentUserId || m.id === currentUserId;
-          const isSpeaking = isMe ? localSpeaking : (m.id === activeSpeakerId || m.clientId === activeSpeakerId || m.isSpeaking);
-          const isMicActive = isMe ? localMicOn : Boolean(m.isOnline && !m.isMuted);
+          const peerRecord = !isMe
+            ? Object.values(peers).find(p => p.peerId === m.id || p.userName === m.name)
+            : null;
+          const isSpeaking = isMe
+            ? localSpeaking
+            : Boolean(peerRecord?.isSpeaking || m.id === activeSpeakerId || m.clientId === activeSpeakerId || m.isSpeaking);
+          const isMicActive = isMe
+            ? localMicOn
+            : (peerRecord ? !peerRecord.isMuted : Boolean(m.isOnline && !m.isMuted));
 
           const initials = (m.name || 'M')
             .split(' ')

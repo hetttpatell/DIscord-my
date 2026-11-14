@@ -591,6 +591,26 @@ io.on('connection', (socket) => {
     });
   });
 
+  // 7b. Playback: Unified Sync (Play / Pause toggle with position)
+  socket.on('player:sync', ({ isPlaying: syncPlaying, playbackPosition: syncPos, currentTime }) => {
+    if (!currentRoomId) return;
+    const room = rooms.get(currentRoomId);
+    if (!room) return;
+
+    const targetPos = typeof syncPos === 'number' ? syncPos : (typeof currentTime === 'number' ? currentTime : room.playbackPosition);
+    room.isPlaying = Boolean(syncPlaying);
+    room.playbackPosition = targetPos;
+    room.lastStateChangeTime = Date.now();
+    roomStore.save(currentRoomId, room);
+
+    io.to(currentRoomId).emit('player:sync', {
+      isPlaying: room.isPlaying,
+      playbackPosition: room.playbackPosition,
+      serverTimestamp: Date.now(),
+      triggeredBy: currentUser?.name || 'Host'
+    });
+  });
+
   // 8. Playback: Seek
   socket.on('player:seek', ({ currentTime }) => {
     if (!currentRoomId) return;

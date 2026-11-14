@@ -145,16 +145,29 @@ class PeerConnectionService {
       const pc = record.pc;
       if (!pc || pc.signalingState === 'closed') continue;
 
-      const audioTransceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
+      let audioTransceiver = typeof pc.getTransceivers === 'function' ? pc.getTransceivers().find(t =>
         (t.sender?.track?.kind === 'audio') || (t.receiver?.track?.kind === 'audio')
       ) : null;
 
-      if (audioTransceiver && audioTransceiver.sender.track !== audioTrack) {
-        try {
-          await audioTransceiver.sender.replaceTrack(audioTrack);
-          traceLog(`Audio replaceTrack resolved for peer ${peerId}`);
-        } catch (err) {
-          console.warn('[WebRTC] Audio replaceTrack error:', err);
+      if (!audioTransceiver) {
+        if (audioTrack) {
+          try {
+            audioTransceiver = pc.addTransceiver(audioTrack, { direction: 'sendrecv', streams: newStream ? [newStream] : [] });
+          } catch (e) {
+            console.debug('[WebRTC] addTransceiver error:', e);
+          }
+        }
+      } else {
+        if (audioTransceiver.direction !== 'sendrecv') {
+          audioTransceiver.direction = 'sendrecv';
+        }
+        if (audioTransceiver.sender.track !== audioTrack) {
+          try {
+            await audioTransceiver.sender.replaceTrack(audioTrack);
+            traceLog(`Audio replaceTrack resolved for peer ${peerId}`);
+          } catch (err) {
+            console.warn('[WebRTC] Audio replaceTrack error:', err);
+          }
         }
       }
     }
@@ -166,7 +179,9 @@ class PeerConnectionService {
   }
 
   async replaceLocalTrack(oldTrack, newTrack) {
-    this.localStream = newStream => newStream;
+    if (newTrack) {
+      this.localStream = new MediaStream([newTrack]);
+    }
     const kind = newTrack?.kind || oldTrack?.kind;
     if (kind !== 'audio') return;
 
@@ -181,6 +196,9 @@ class PeerConnectionService {
       ) : null;
 
       if (transceiver) {
+        if (transceiver.direction !== 'sendrecv') {
+          transceiver.direction = 'sendrecv';
+        }
         try {
           await transceiver.sender.replaceTrack(newTrack || null);
         } catch (err) {
@@ -205,6 +223,7 @@ class PeerConnectionService {
   bindSocketListeners() {
     this.unbindSocketListeners();
 
+    socket.on('webrtc:existing-peers', this.handleExistingPeers);
     socket.on('webrtc:peer-joined', this.handlePeerJoined);
     socket.on('webrtc:signal', this.handleSignal);
     socket.on('webrtc:media-state-updated', this.handleMediaStateUpdated);
@@ -212,11 +231,23 @@ class PeerConnectionService {
   }
 
   unbindSocketListeners() {
+    socket.off('webrtc:existing-peers', this.handleExistingPeers);
     socket.off('webrtc:peer-joined', this.handlePeerJoined);
     socket.off('webrtc:signal', this.handleSignal);
     socket.off('webrtc:media-state-updated', this.handleMediaStateUpdated);
     socket.off('webrtc:peer-left', this.handlePeerLeft);
   }
+
+  handleExistingPeers = ({ peers }) => {
+    if (!this.isCallActive || !Array.isArray(peers)) return;
+    console.log(`[WebRTC] Received ${peers.length} existing peers from room:`, peers);
+    for (const peer of peers) {
+      if (peer.peerId && peer.peerId !== socket.id) {
+        this.getOrCreatePeerConnection(peer.peerId, peer.userName, peer.avatarColor, { isMuted: peer.isMuted });
+      }
+    }
+    this.notify('peers-updated', this.getAllPeers());
+  };
 
   handlePeerJoined = ({ peerId, userName, avatarColor, mediaState }) => {
     if (!this.isCallActive || peerId === socket.id) return;
@@ -225,9 +256,9 @@ class PeerConnectionService {
     this.notify('peers-updated', this.getAllPeers());
   };
 
-  handleSignal = async ({ from, signal, type }) => {
+  handleSignal = async ({ from, fromName, signal, type }) => {
     if (!this.isCallActive) return;
-    const record = this.getOrCreatePeerConnection(from);
+    const record = this.getOrCreatePeerConnection(from, fromName);
     const pc = record.pc;
 
     try {
@@ -564,19 +595,14 @@ class PeerConnectionService {
       const media = this.peerMediaStates.get(peerId) || {};
       const stream = this.remoteStreams.get(peerId) || null;
 
-      const audioTracks = stream ? stream.getAudioTracks() : [];
-      let isMuted = Boolean(media.isMuted);
-      if (audioTracks.length > 0) {
-        const hasLiveAudio = audioTracks.some(t => t.readyState === 'live' && t.enabled);
-        isMuted = !hasLiveAudio;
-      }
+      const isMuted = media.isMuted !== undefined ? Boolean(media.isMuted) : false;
 
       peers[peerId] = {
         peerId,
         userName: record.peerName || media.userName || 'Member',
         avatarColor: record.peerColor || media.avatarColor || '#5865f2',
         isMuted,
-        isSpeaking: Boolean(media.isSpeaking),
+        isSpeaking: Boolean(media.isSpeaking && !isMuted),
         connectionQuality: media.connectionQuality || 'good',
         iceState: record.iceState,
         troubleConnecting: Boolean(record.troubleConnecting),

@@ -32,13 +32,8 @@ function RemoteAudioItem({ peer, onAutoplayBlocked, voicesVolume = 100 }) {
       }
     });
 
-    const audioTracks = peer.stream.getAudioTracks();
-    if (audioTracks.length > 0) {
-      const hasLiveAudio = audioTracks.some(t => t.readyState === 'live' && t.enabled);
-      el.muted = !hasLiveAudio;
-    } else {
-      el.muted = Boolean(peer.isMuted);
-    }
+    // Set audio element mute state based on peer signaling mute state
+    el.muted = Boolean(peer.isMuted);
 
     const tryPlay = () => {
       const p = el.play();

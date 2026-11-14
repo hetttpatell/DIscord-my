@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, SkipForward } from 'lucide-react';
+import { Play, Pause, SkipForward, Volume2, VolumeX, Search } from 'lucide-react';
 import { formatTime } from '../services/youtube';
 
 /**
@@ -8,11 +8,14 @@ import { formatTime } from '../services/youtube';
 export default function PlaybackOverlay({
   currentTrack,
   isPlaying,
-  playbackPosition,
+  playbackPosition = 0,
   duration = 0,
+  isMuted = false,
   onTogglePlay,
   onSkip,
-  onSeek
+  onSeek,
+  onToggleMute,
+  onOpenSearch
 }) {
   const [isScrubbing, setIsScrubbing] = React.useState(false);
   const [scrubPosition, setScrubPosition] = React.useState(0);
@@ -29,26 +32,61 @@ export default function PlaybackOverlay({
 
   const handleSliderUp = () => {
     setIsScrubbing(false);
-    onSeek(scrubPosition);
+    if (onSeek) onSeek(scrubPosition);
   };
 
   if (!currentTrack) {
     return (
-      <div className="w-full bg-[#141419]/90 border border-white/10 rounded-2xl p-4 text-center select-none">
-        <p className="text-xs text-[#9A978F]">No music currently playing. Search or paste a link to start.</p>
+      <div className="w-full bg-[#141419]/90 border border-white/10 rounded-2xl p-5 text-center select-none shadow-lg">
+        <p className="text-xs text-[#9A978F] mb-3">No music currently playing in the room.</p>
+        {onOpenSearch && (
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#FF9F1C] to-[#FF5A5F] hover:opacity-95 text-white font-semibold rounded-xl text-xs shadow-lg active:scale-95 transition-all cursor-pointer"
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span>Search or Paste a YouTube Track</span>
+          </button>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="w-full bg-[#141419]/90 border border-white/10 rounded-2xl p-4 select-none space-y-3">
+    <div className="w-full bg-[#141419]/90 border border-white/10 rounded-2xl p-4 select-none space-y-3 shadow-xl">
       {/* Current Track Info */}
       <div className="flex items-center justify-between gap-3 min-w-0">
         <div className="min-w-0 flex-1">
-          <div className="text-xs uppercase tracking-wider text-[#FF9F1C] font-bold">Now Playing</div>
-          <h3 className="text-sm sm:text-base font-bold text-white truncate">{currentTrack.title}</h3>
-          <p className="text-xs text-[#9A978F] truncate mt-0.5">{currentTrack.channelTitle || 'YouTube'}</p>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-wider text-[#FF9F1C] font-bold">Now Playing</span>
+            {isPlaying && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-green-400 font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                Live Sync
+              </span>
+            )}
+          </div>
+          <h3 className="text-sm sm:text-base font-bold text-white truncate mt-0.5">{currentTrack.title}</h3>
+          <p className="text-xs text-[#9A978F] truncate">{currentTrack.channelTitle || 'YouTube'}</p>
         </div>
+
+        {/* Quick Mute Toggle */}
+        {onToggleMute && (
+          <button
+            type="button"
+            onClick={onToggleMute}
+            className={`p-2 rounded-xl border transition-all cursor-pointer active:scale-95 ${
+              isMuted
+                ? 'bg-red-500/15 border-red-500/30 text-red-300'
+                : 'bg-white/5 border-white/10 text-white/70 hover:text-white'
+            }`}
+            title={isMuted ? 'Unmute music' : 'Mute music'}
+            aria-label={isMuted ? 'Unmute music' : 'Mute music'}
+          >
+            {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+          </button>
+        )}
       </div>
 
       {/* Scrub bar */}
@@ -58,7 +96,7 @@ export default function PlaybackOverlay({
             type="range"
             min="0"
             max={duration > 0 ? Math.floor(duration) : 100}
-            value={displayPosition}
+            value={Math.min(displayPosition, duration > 0 ? duration : 100)}
             onChange={handleSliderChange}
             onPointerDown={handleSliderDown}
             onPointerUp={handleSliderUp}
@@ -87,6 +125,7 @@ export default function PlaybackOverlay({
           onClick={onSkip}
           className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/15 text-white flex items-center justify-center border border-white/10 active:scale-95 transition-all cursor-pointer"
           aria-label="Skip to next track"
+          title="Skip to next track"
         >
           <SkipForward className="w-4 h-4" />
         </button>

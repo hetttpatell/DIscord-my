@@ -43,8 +43,9 @@ router.post('/rooms', roomAuthRateLimiter, async (req, res, next) => {
   try {
     const parseResult = roomAuthSchema.safeParse(req.body);
     if (!parseResult.success) {
+      const issues = parseResult.error.issues || parseResult.error.errors || [];
       return res.status(400).json({
-        error: parseResult.error.errors.map((e) => e.message).join(', '),
+        error: issues.map((e) => e.message).join(', '),
       });
     }
 
@@ -86,8 +87,9 @@ router.post('/rooms/join', roomAuthRateLimiter, async (req, res, next) => {
   try {
     const parseResult = roomAuthSchema.safeParse(req.body);
     if (!parseResult.success) {
+      const issues = parseResult.error.issues || parseResult.error.errors || [];
       return res.status(400).json({
-        error: parseResult.error.errors.map((e) => e.message).join(', '),
+        error: issues.map((e) => e.message).join(', '),
       });
     }
 

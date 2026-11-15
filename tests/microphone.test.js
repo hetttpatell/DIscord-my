@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   requestMicrophone,
+  requestMicrophoneStream,
   stopMicrophone,
   setMicrophoneMuted,
+  clearStoredDenialFlags,
   isInAppBrowser,
-  subscribeToPermissionChange,
+  getLastGetUserMediaResult,
 } from '../src/lib/microphone.js';
 
 describe('Microphone Permission & Stream Manager (src/lib/microphone.js)', () => {
@@ -65,11 +67,10 @@ describe('Microphone Permission & Stream Manager (src/lib/microphone.js)', () =>
     vi.restoreAllMocks();
   });
 
-  it('fresh site: requests microphone with recommended constraints and succeeds', async () => {
-    const result = await requestMicrophone();
+  it('fresh site: requestMicrophoneStream calls getUserMedia directly with recommended constraints', async () => {
+    const stream = await requestMicrophoneStream();
 
-    expect(result.ok).toBe(true);
-    expect(result.stream).toBe(mockStream);
+    expect(stream).toBe(mockStream);
     expect(mockGetUserMedia).toHaveBeenCalledWith({
       audio: {
         echoCancellation: true,
@@ -78,67 +79,36 @@ describe('Microphone Permission & Stream Manager (src/lib/microphone.js)', () =>
       },
       video: false,
     });
+
+    const lastResult = getLastGetUserMediaResult();
+    expect(lastResult.ok).toBe(true);
   });
 
-  it('previously allowed: reuses existing stream without re-invoking getUserMedia', async () => {
-    const firstResult = await requestMicrophone();
-    expect(firstResult.ok).toBe(true);
-    expect(mockGetUserMedia).toHaveBeenCalledTimes(1);
+  it('stops existing tracks before requesting a new stream to prevent NotReadableError', async () => {
+    await requestMicrophoneStream();
+    expect(mockTrack.stop).not.toHaveBeenCalled();
 
-    const secondResult = await requestMicrophone();
-    expect(secondResult.ok).toBe(true);
-    expect(secondResult.stream).toBe(mockStream);
-    // Should NOT call getUserMedia a second time
-    expect(mockGetUserMedia).toHaveBeenCalledTimes(1);
+    // Call again to simulate re-acquisition
+    await requestMicrophoneStream();
+    expect(mockTrack.stop).toHaveBeenCalled();
   });
 
-  it('previously blocked: NotAllowedError maps to reason "denied"', async () => {
+  it('previously blocked: throws exact NotAllowedError on failure', async () => {
     const error = new Error('Permission denied');
     error.name = 'NotAllowedError';
     mockGetUserMedia.mockRejectedValue(error);
 
-    const result = await requestMicrophone();
+    await expect(requestMicrophoneStream()).rejects.toThrow('Permission denied');
 
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('denied');
-    expect(result.name).toBe('NotAllowedError');
-    expect(result.message).toBe('Microphone access denied.');
+    const lastResult = getLastGetUserMediaResult();
+    expect(lastResult.ok).toBe(false);
+    expect(lastResult.name).toBe('NotAllowedError');
   });
 
-  it('mic in use by another app: NotReadableError maps to reason "in_use"', async () => {
-    const error = new Error('Could not start audio source');
-    error.name = 'NotReadableError';
-    mockGetUserMedia.mockRejectedValue(error);
-
-    const result = await requestMicrophone();
-
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('in_use');
-    expect(result.name).toBe('NotReadableError');
-    expect(result.message).toBe('Microphone is being used by another app or tab. Close it and try again.');
-  });
-
-  it('no microphone found: NotFoundError maps to reason "not_found"', async () => {
-    const error = new Error('Requested device not found');
-    error.name = 'NotFoundError';
-    mockGetUserMedia.mockRejectedValue(error);
-
-    const result = await requestMicrophone();
-
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('not_found');
-    expect(result.name).toBe('NotFoundError');
-    expect(result.message).toBe('No microphone found on this device.');
-  });
-
-  it('insecure context: returns reason "insecure" without calling getUserMedia', async () => {
+  it('insecure context: throws SecurityError without calling getUserMedia', async () => {
     mockWindow.isSecureContext = false;
 
-    const result = await requestMicrophone();
-
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('insecure');
-    expect(result.message).toContain('secure (HTTPS)');
+    await expect(requestMicrophoneStream()).rejects.toThrow('secure (HTTPS)');
     expect(mockGetUserMedia).not.toHaveBeenCalled();
   });
 
@@ -150,9 +120,9 @@ describe('Microphone Permission & Stream Manager (src/lib/microphone.js)', () =>
       .mockRejectedValueOnce(overconstrainedErr)
       .mockResolvedValueOnce(mockStream);
 
-    const result = await requestMicrophone();
+    const stream = await requestMicrophoneStream();
 
-    expect(result.ok).toBe(true);
+    expect(stream).toBe(mockStream);
     expect(mockGetUserMedia).toHaveBeenCalledTimes(2);
     expect(mockGetUserMedia).toHaveBeenLastCalledWith({ audio: true });
   });
@@ -183,33 +153,30 @@ describe('Microphone Permission & Stream Manager (src/lib/microphone.js)', () =>
     expect(mockTrack.stop).not.toHaveBeenCalled();
   });
 
-  it('Permissions API: subscribes to permission change and notifies on "granted"', async () => {
-    let changeHandler;
-    const mockStatus = {
-      state: 'denied',
-      addEventListener: vi.fn((event, handler) => {
-        changeHandler = handler;
+  it('clears stored denial flags from localStorage and sessionStorage', () => {
+    const mockStorage = {
+      items: {
+        mic_denied: 'true',
+        afterspot_mic_denied: 'true',
+      },
+      removeItem: vi.fn(function (k) {
+        delete this.items[k];
       }),
-      removeEventListener: vi.fn(),
     };
 
-    mockNavigator.permissions.query = vi.fn().mockResolvedValue(mockStatus);
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: mockStorage,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      value: mockStorage,
+      configurable: true,
+      writable: true,
+    });
 
-    const onGranted = vi.fn();
-    const unsubscribe = subscribeToPermissionChange(onGranted);
-
-    // Wait for promise microtask to resolve
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(mockStatus.addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
-
-    // Simulate user toggling permission to 'granted' in site settings
-    mockStatus.state = 'granted';
-    changeHandler();
-
-    expect(onGranted).toHaveBeenCalledTimes(1);
-
-    unsubscribe();
-    expect(mockStatus.removeEventListener).toHaveBeenCalledWith('change', expect.any(Function));
+    clearStoredDenialFlags();
+    expect(mockStorage.removeItem).toHaveBeenCalledWith('mic_denied');
+    expect(mockStorage.removeItem).toHaveBeenCalledWith('afterspot_mic_denied');
   });
 });

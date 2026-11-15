@@ -1,9 +1,36 @@
 /**
  * Dedicated microphone management module ensuring reliable mobile permission handling.
- * All microphone access across Afterspot must go through this module.
+ * Eliminates all pre-checks and gates before getUserMedia.
  */
 
 let activeMicStream = null;
+let lastGetUserMediaResult = null;
+
+/**
+ * Delete every persisted or in-memory flag that records a denial (localStorage, sessionStorage)
+ * so users already stuck immediately recover.
+ */
+export function clearStoredDenialFlags() {
+  if (typeof window === 'undefined') return;
+  const denialKeys = [
+    'mic_denied',
+    'afterspot_mic_denied',
+    'micDenied',
+    'hasPermission',
+    'permissionDenied',
+    'microphone_denied',
+  ];
+
+  denialKeys.forEach((key) => {
+    try {
+      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
+    } catch {}
+  });
+}
+
+// Automatically clear any stuck denial flags on load
+clearStoredDenialFlags();
 
 /**
  * Checks if the user is running inside an in-app browser (e.g. Instagram, WhatsApp, Facebook, Line, Android WebView).
@@ -15,63 +42,14 @@ export function isInAppBrowser() {
 }
 
 /**
- * Safely queries the microphone permission status using the Permissions API.
- * Returns 'granted' | 'denied' | 'prompt' | 'unknown'.
+ * Returns the last result of a getUserMedia capture attempt for diagnostics.
  */
-export async function getPermissionStatus() {
-  if (typeof navigator === 'undefined' || !navigator.permissions?.query) {
-    return 'unknown';
-  }
-  try {
-    const status = await navigator.permissions.query({ name: 'microphone' });
-    return status?.state || 'unknown';
-  } catch {
-    return 'unknown';
-  }
+export function getLastGetUserMediaResult() {
+  return lastGetUserMediaResult;
 }
 
-/**
- * Subscribes to microphone permission changes.
- * When the user changes permission in browser site settings to 'granted',
- * executes onGranted without requiring a page reload.
- */
-export function subscribeToPermissionChange(onGranted) {
-  if (typeof navigator === 'undefined' || !navigator.permissions?.query) {
-    return () => {};
-  }
-
-  let permissionStatus = null;
-  let isCancelled = false;
-
-  const handleChange = () => {
-    if (permissionStatus && permissionStatus.state === 'granted') {
-      onGranted();
-    }
-  };
-
-  navigator.permissions
-    .query({ name: 'microphone' })
-    .then((status) => {
-      if (isCancelled) return;
-      permissionStatus = status;
-      if (typeof permissionStatus.addEventListener === 'function') {
-        permissionStatus.addEventListener('change', handleChange);
-      } else {
-        permissionStatus.onchange = handleChange;
-      }
-    })
-    .catch(() => {});
-
-  return () => {
-    isCancelled = true;
-    if (permissionStatus) {
-      if (typeof permissionStatus.removeEventListener === 'function') {
-        permissionStatus.removeEventListener('change', handleChange);
-      } else {
-        permissionStatus.onchange = null;
-      }
-    }
-  };
+export function setLastGetUserMediaResult(result) {
+  lastGetUserMediaResult = result;
 }
 
 /**
@@ -143,119 +121,31 @@ export function setMicrophoneMuted(muted) {
 }
 
 /**
- * Formats, logs, and maps errors by error.name into structured reason objects.
- */
-async function mapAndLogFailure(err) {
-  const errorName = err?.name || 'Error';
-  const errorMessage = err?.message || '';
-  const permissionState = await getPermissionStatus();
-  const isSecure = typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false;
-  const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-
-  // Required diagnostic log on every failure
-  console.error('[mic]', {
-    name: errorName,
-    message: errorMessage,
-    permissionState,
-    isSecureContext: isSecure,
-    userAgent,
-  });
-
-  // In-app browser detection
-  if (isInAppBrowser() && (errorName === 'NotAllowedError' || errorName === 'SecurityError')) {
-    return {
-      ok: false,
-      reason: 'in_app_browser',
-      name: errorName,
-      message: 'Open this link in Chrome or Safari to use the microphone.',
-    };
-  }
-
-  // Map errors by error.name
-  if (errorName === 'NotAllowedError') {
-    return {
-      ok: false,
-      reason: 'denied',
-      name: errorName,
-      message: 'Microphone access denied.',
-    };
-  }
-
-  if (errorName === 'NotFoundError') {
-    return {
-      ok: false,
-      reason: 'not_found',
-      name: errorName,
-      message: 'No microphone found on this device.',
-    };
-  }
-
-  if (errorName === 'NotReadableError' || errorName === 'AbortError') {
-    return {
-      ok: false,
-      reason: 'in_use',
-      name: errorName,
-      message: 'Microphone is being used by another app or tab. Close it and try again.',
-    };
-  }
-
-  if (errorName === 'SecurityError') {
-    return {
-      ok: false,
-      reason: 'security',
-      name: errorName,
-      message: 'Blocked by page security policy.',
-    };
-  }
-
-  return {
-    ok: false,
-    reason: 'error',
-    name: errorName,
-    message: errorMessage ? `${errorName}: ${errorMessage}` : errorName,
-  };
-}
-
-/**
- * Requests access to the microphone.
- * MUST be invoked synchronously within the user click gesture.
+ * Directly requests microphone access via getUserMedia with zero pre-checks or gates.
+ * Throws on failure with the exact browser error.
  *
- * @returns {Promise<{ ok: true, stream: MediaStream } | { ok: false, reason: string, name: string, message: string }>}
+ * @returns {Promise<MediaStream>}
  */
-export async function requestMicrophone() {
-  // 1. Synchronous environment checks FIRST (No awaits, no timeouts, no promises prior to this)
+export async function requestMicrophoneStream() {
+  // 1. Stop existing local audio tracks before requesting a new stream
+  // so a second capture never causes NotReadableError on mobile Android
+  stopMicrophone();
+
   if (typeof window === 'undefined') {
-    return {
-      ok: false,
-      reason: 'unsupported',
-      name: 'UnsupportedError',
-      message: 'Window is not defined.',
-    };
+    const err = new Error('Window is not defined');
+    err.name = 'UnsupportedError';
+    setLastGetUserMediaResult({ ok: false, name: err.name, message: err.message });
+    throw err;
   }
 
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-    const failure = {
-      ok: false,
-      reason: 'insecure',
-      name: 'SecurityError',
-      message: 'Microphone needs a secure (HTTPS) page.',
-    };
-    await mapAndLogFailure(failure);
-    return failure;
+    const err = new Error('Microphone needs a secure (HTTPS) page.');
+    err.name = 'SecurityError';
+    setLastGetUserMediaResult({ ok: false, name: err.name, message: err.message });
+    throw err;
   }
 
-  // 2. Reuse existing stream if live
-  const existing = getActiveMicrophoneStream();
-  if (existing) {
-    setMicrophoneMuted(false);
-    resumeAudioContextAndElements();
-    return { ok: true, stream: existing };
-  }
-
-  // Clean up any stale or dead tracks
-  stopMicrophone();
-
-  // 3. Constraints: first try echoCancellation, noiseSuppression, autoGainControl; never video
+  // 2. Constraints: first try echoCancellation, noiseSuppression, autoGainControl; never video
   const primaryConstraints = {
     audio: {
       echoCancellation: true,
@@ -275,10 +165,20 @@ export async function requestMicrophone() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (retryErr) {
-        return await mapAndLogFailure(retryErr);
+        setLastGetUserMediaResult({
+          ok: false,
+          name: retryErr.name || 'Error',
+          message: retryErr.message || '',
+        });
+        throw retryErr;
       }
     } else {
-      return await mapAndLogFailure(err);
+      setLastGetUserMediaResult({
+        ok: false,
+        name: err.name || 'Error',
+        message: err.message || '',
+      });
+      throw err;
     }
   }
 
@@ -287,9 +187,36 @@ export async function requestMicrophone() {
     window.__activeAudioStream = stream;
   }
 
-  // Resume audio contexts and elements in the same gesture
+  setLastGetUserMediaResult({ ok: true, name: 'Success', message: 'Stream acquired' });
+
+  // Resume audio contexts and elements in the same user gesture
   resumeAudioContextAndElements();
 
-  return { ok: true, stream };
+  return stream;
 }
 
+/**
+ * Safe wrapper returning structured { ok, stream } or { ok, reason, name, message }.
+ */
+export async function requestMicrophone() {
+  try {
+    const stream = await requestMicrophoneStream();
+    return { ok: true, stream };
+  } catch (err) {
+    const errorName = err?.name || 'Error';
+    const errorMessage = err?.message || '';
+
+    let reason = 'error';
+    if (errorName === 'NotAllowedError') reason = 'denied';
+    else if (errorName === 'NotFoundError') reason = 'not_found';
+    else if (errorName === 'NotReadableError' || errorName === 'AbortError') reason = 'in_use';
+    else if (errorName === 'SecurityError') reason = 'security';
+
+    return {
+      ok: false,
+      reason,
+      name: errorName,
+      message: errorMessage || 'Failed to capture microphone',
+    };
+  }
+}

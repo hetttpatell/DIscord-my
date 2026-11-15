@@ -5,6 +5,7 @@ import { Toaster } from 'sonner';
 import { TooltipProvider } from './components/Tooltip';
 import LobbyPage from './routes/LobbyPage';
 import RoomPage from './routes/RoomPage';
+import { MicDebugPanel } from './components/MicDebugPanel';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -25,6 +26,7 @@ export default function App() {
             <Route path="/" element={<LobbyPage />} />
             <Route path="/room/:roomId" element={<RoomPage />} />
           </Routes>
+          <MicDebugPanel />
         </BrowserRouter>
         <Toaster
           position="top-center"

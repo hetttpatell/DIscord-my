@@ -85,6 +85,12 @@ app.use(
   })
 );
 
+// Explicitly permit microphone access in Permissions-Policy
+app.use((req, res, next) => {
+  res.setHeader('Permissions-Policy', 'microphone=(self)');
+  next();
+});
+
 app.use(express.json({ limit: '100kb' }));
 
 // Pino request logging (excluding secrets and health checks)

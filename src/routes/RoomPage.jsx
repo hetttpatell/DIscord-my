@@ -9,6 +9,7 @@ import { YouTubePlayer } from '../features/player/YouTubePlayer';
 import { YouTubeSearchSheet } from '../features/search/YouTubeSearchSheet';
 import { LiveKitVoiceProvider } from '../features/voice/LiveKitVoiceProvider';
 import { Sheet } from '../components/Sheet';
+import { stopMicrophone } from '../lib/microphone';
 
 export default function RoomPage() {
   const { roomId: urlRoomId } = useParams();
@@ -64,10 +65,12 @@ export default function RoomPage() {
       socket.off('room:members', handleMembers);
       socket.off('voice:state', handleVoiceState);
       socket.disconnect();
+      stopMicrophone();
     };
   }, [socket, setMembers]);
 
   const handleLeave = () => {
+    stopMicrophone();
     clearSession();
     navigate('/');
   };

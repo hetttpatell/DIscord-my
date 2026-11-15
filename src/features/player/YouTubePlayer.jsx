@@ -4,6 +4,7 @@ import { Play, Music } from 'lucide-react';
 import { PlayerControls } from './PlayerControls';
 import { useYouTubeSync } from './useYouTubeSync';
 import { useAppStore } from '../../stores/useAppStore';
+import { ReactionOverlay, ReactionBar } from '../reaction/ReactionOverlay';
 
 export function YouTubePlayer({ socket, onOpenSearch }) {
   const { playerState } = useAppStore();
@@ -87,7 +88,13 @@ export function YouTubePlayer({ socket, onOpenSearch }) {
     const state = event.data;
     const player = event.target;
 
-    if (state === 1) {
+    if (state === 0) {
+      // ended: emit queue:ended to advance queue
+      const currentNowPlaying = useAppStore.getState().nowPlaying;
+      if (currentNowPlaying?.id && socket) {
+        socket.emit('queue:ended', { itemId: currentNowPlaying.id });
+      }
+    } else if (state === 1) {
       // playing
       setIsAutoplayBlocked(false);
       const dur = await player.getDuration();
@@ -201,6 +208,9 @@ export function YouTubePlayer({ socket, onOpenSearch }) {
           </div>
         )}
 
+        {/* Floating Emoji Reactions Overlay */}
+        <ReactionOverlay socket={socket} />
+
         {/* Mobile Autoplay Policy Tap-to-Join Overlay */}
         {isAutoplayBlocked && (
           <button
@@ -216,6 +226,11 @@ export function YouTubePlayer({ socket, onOpenSearch }) {
             <span className="text-xs text-[#9A978F] mt-1">Audio requires a tap to start</span>
           </button>
         )}
+      </div>
+
+      {/* Floating Reaction Bar */}
+      <div className="px-4 py-1.5 flex justify-center bg-[#0B0B10]/60 border-t border-white/5">
+        <ReactionBar socket={socket} />
       </div>
 
       {/* Synchronized Custom Controls */}

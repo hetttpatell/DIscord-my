@@ -57,6 +57,13 @@ export function YouTubeSearchSheet({ open, onOpenChange, socket }) {
     onOpenChange(false);
   };
 
+  const handleAddToQueue = (e, video) => {
+    e.stopPropagation();
+    if (!socket || !video) return;
+    socket.emit('queue:add', { video });
+    toast.success('Added to queue!');
+  };
+
   const handleClear = () => {
     setSearchTerm('');
   };
@@ -178,10 +185,14 @@ export function YouTubeSearchSheet({ open, onOpenChange, socket }) {
             {!isLoading && !isError && results.length > 0 && (
               <div className="space-y-2 pb-6" role="list">
                 {results.map((video) => (
-                  <button
+                  <div
                     key={video.videoId}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleSelect(video.videoId)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSelect(video.videoId);
+                    }}
                     className="w-full flex items-center gap-3 p-2.5 rounded-xl bg-[#0B0B10]/60 hover:bg-[#1C1C24] border border-white/5 hover:border-white/10 transition-all text-left cursor-pointer min-h-[44px] group"
                     aria-label={`Play ${video.title} by ${video.channel}`}
                   >
@@ -210,7 +221,17 @@ export function YouTubeSearchSheet({ open, onOpenChange, socket }) {
                         {video.channel}
                       </p>
                     </div>
-                  </button>
+
+                    {/* Add to Queue Button */}
+                    <button
+                      type="button"
+                      onClick={(e) => handleAddToQueue(e, video)}
+                      className="px-2.5 py-1.5 rounded-lg bg-[#1C1C24] hover:bg-[#FF9F1C] hover:text-[#0B0B10] text-[#FF9F1C] text-xs font-semibold border border-white/10 transition-colors shrink-0 min-h-[36px] flex items-center justify-center cursor-pointer"
+                      aria-label={`Add ${video.title} to queue`}
+                    >
+                      + Queue
+                    </button>
+                  </div>
                 ))}
               </div>
             )}

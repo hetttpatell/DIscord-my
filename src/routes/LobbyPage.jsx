@@ -8,6 +8,8 @@ import { Input } from '../components/Input';
 import { useAppStore } from '../stores/useAppStore';
 import { apiRequest } from '../lib/api';
 
+import { requestMicrophone } from '../lib/microphone';
+
 const ROOM_ID_REGEX = /^[a-zA-Z0-9_-]{3,32}$/;
 
 export default function LobbyPage() {
@@ -17,9 +19,16 @@ export default function LobbyPage() {
   const [tab, setTab] = useState('create'); // 'create' | 'join'
   const [roomId, setRoomId] = useState('');
   const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState(
-    () => (typeof window !== 'undefined' ? localStorage.getItem('afterspot_displayName') || '' : '')
-  );
+  const [displayName, setDisplayName] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return (
+        localStorage.getItem('afterspot:name') ||
+        localStorage.getItem('afterspot_displayName') ||
+        ''
+      );
+    }
+    return '';
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState({});
@@ -42,8 +51,8 @@ export default function LobbyPage() {
     const trimmedName = displayName.trim();
     if (!trimmedName) {
       nextErrors.displayName = 'Display name is required';
-    } else if (trimmedName.length > 24) {
-      nextErrors.displayName = 'Display name must be at most 24 characters';
+    } else if (trimmedName.length > 20) {
+      nextErrors.displayName = 'Display name must be 1 to 20 characters';
     }
 
     setErrors(nextErrors);
@@ -55,14 +64,37 @@ export default function LobbyPage() {
     if (!validate() || isLoading) return;
 
     setIsLoading(true);
+
+    // Feature B.1: inside Join button tap (user gesture), request microphone once
+    try {
+      const micResult = await requestMicrophone();
+      if (micResult?.ok && micResult.stream) {
+        const audioTracks = micResult.stream.getAudioTracks();
+        const wasUnmuted =
+          typeof window !== 'undefined' &&
+          localStorage.getItem('afterspot:mic_unmuted') === 'true';
+        audioTracks.forEach((t) => {
+          t.enabled = wasUnmuted;
+        });
+      }
+    } catch {
+      // Don't block joining if mic permission was cancelled or blocked, user can retry inside room
+    }
+
     const endpoint = tab === 'create' ? '/api/rooms' : '/api/rooms/join';
+    const cleanName = displayName.trim().slice(0, 20);
     const payload = {
       roomId: roomId.trim(),
       password,
-      displayName: displayName.trim(),
+      displayName: cleanName,
     };
 
     try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('afterspot:name', cleanName);
+        localStorage.setItem('afterspot_displayName', cleanName);
+      }
+
       const data = await apiRequest(endpoint, {
         method: 'POST',
         body: payload,
@@ -246,7 +278,7 @@ export default function LobbyPage() {
                   if (errors.displayName) setErrors((prev) => ({ ...prev, displayName: null }));
                 }}
                 disabled={isLoading}
-                maxLength={24}
+                maxLength={20}
                 aria-invalid={Boolean(errors.displayName)}
                 aria-describedby={errors.displayName ? 'displayName-error' : undefined}
                 className={errors.displayName ? 'border-[#FF5A5F]' : ''}

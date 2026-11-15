@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
-import { roomStore } from '../services/roomStore.js';
+import { roomStore, MAX_ROOM_MEMBERS } from '../services/roomStore.js';
 import {
   hashPassword,
   verifyPassword,
@@ -34,8 +34,8 @@ export const roomAuthSchema = z.object({
   displayName: z
     .string()
     .trim()
-    .min(1, 'Display name must be 1-24 characters')
-    .max(24, 'Display name must be 1-24 characters'),
+    .min(1, 'Display name must be 1-20 characters')
+    .max(20, 'Display name must be 1-20 characters'),
 });
 
 // POST /api/rooms (Create room)
@@ -101,9 +101,9 @@ router.post('/rooms/join', roomAuthRateLimiter, async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid room ID or password' });
     }
 
-    const activeMembers = Object.values(room.members || {}).filter((m) => m.isOnline);
-    if (activeMembers.length >= 20) {
-      return res.status(403).json({ error: 'Room is full (maximum 20 participants)' });
+    const currentMembers = Array.isArray(room.members) ? room.members : [];
+    if (currentMembers.length >= MAX_ROOM_MEMBERS) {
+      return res.status(403).json({ error: 'Room is full' });
     }
 
     const memberId = generateMemberId();
@@ -125,4 +125,3 @@ router.post('/rooms/join', roomAuthRateLimiter, async (req, res, next) => {
 });
 
 export default router;
-

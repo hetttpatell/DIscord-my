@@ -163,7 +163,7 @@ describe('Phase 2: Rooms and Security Endpoints & Services', () => {
   });
 
   describe('Room Store Member Limits & Expiration', () => {
-    it('enforces maximum 20 members limit per room', async () => {
+    it('enforces maximum 6 members limit per room', async () => {
       const roomId = 'full-room';
       await roomStore.createRoom({
         roomId,
@@ -172,20 +172,20 @@ describe('Phase 2: Rooms and Security Endpoints & Services', () => {
         creatorMemberId: 'm_creator',
       });
 
-      // m_creator is member 1. Add 19 more members so room has 20 total members
-      for (let i = 1; i <= 19; i++) {
+      // Add 6 members total
+      for (let i = 1; i <= 6; i++) {
         await roomStore.addMember(roomId, {
           memberId: `m_${i}`,
-          displayName: `User ${i}`,
+          name: `User ${i}`,
           socketId: `socket_${i}`,
         });
       }
 
-      // 21st member join attempt should fail
+      // 7th member join attempt should fail
       await expect(
         roomStore.addMember(roomId, {
           memberId: 'm_overflow',
-          displayName: 'Overflow User',
+          name: 'Overflow User',
           socketId: 'socket_overflow',
         })
       ).rejects.toThrow(/Room is full/);

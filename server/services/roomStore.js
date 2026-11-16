@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import Redis from 'ioredis';
 import { config } from '../config.js';
 
@@ -31,16 +32,26 @@ export class RoomStore {
   }
 
   async getRoom(roomId) {
+    if (!roomId) return null;
     const id = roomId.trim();
+    let room = null;
     if (this.redis) {
       try {
         const raw = await this.redis.get(`room:${id}`);
-        if (raw) return JSON.parse(raw);
+        if (raw) room = JSON.parse(raw);
       } catch (err) {
         console.warn('[RoomStore] Redis get error:', err.message);
       }
     }
-    return this.memoryRooms.get(id) || null;
+    if (!room) {
+      room = this.memoryRooms.get(id) || null;
+    }
+    if (room) {
+      if (!Array.isArray(room.queue)) room.queue = [];
+      if (room.nowPlaying === undefined) room.nowPlaying = null;
+      if (!room.queueVersion) room.queueVersion = 1;
+    }
+    return room;
   }
 
   async saveRoom(room) {
@@ -78,6 +89,9 @@ export class RoomStore {
         positionSec: 0,
         serverUpdatedAtMs: Date.now(),
       },
+      queue: [],
+      nowPlaying: null,
+      queueVersion: 1,
     };
 
     if (creatorMemberId && creatorDisplayName) {
@@ -156,6 +170,133 @@ export class RoomStore {
 
     await this.saveRoom(room);
     return room.playerState;
+  }
+
+  // Queue to play management
+  async addToQueue(roomId, video, member) {
+    const room = await this.getRoom(roomId);
+    if (!room) return null;
+    if (!Array.isArray(room.queue)) room.queue = [];
+
+    if (room.queue.length >= 50) {
+      throw new Error('Queue is full (max 50 tracks)');
+    }
+
+    const isDuplicate =
+      room.queue.some((it) => it.videoId === video.videoId) ||
+      (room.nowPlaying && room.nowPlaying.videoId === video.videoId);
+
+    if (isDuplicate) {
+      throw new Error('Video already in queue or currently playing');
+    }
+
+    const item = {
+      id: crypto.randomUUID(),
+      videoId: video.videoId,
+      title: video.title || 'Untitled',
+      channel: video.channel || 'Unknown',
+      thumbnail:
+        video.thumbnailUrl ||
+        video.thumbnail ||
+        `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+      durationSeconds: Number(video.durationSec || video.durationSeconds || 0) || 0,
+      addedById: member?.memberId || 'anonymous',
+      addedByName: member?.displayName || 'Guest',
+      addedAt: Date.now(),
+    };
+
+    let startedImmediately = false;
+    if (!room.nowPlaying || !room.playerState.videoId) {
+      room.nowPlaying = item;
+      startedImmediately = true;
+      room.playerState = {
+        videoId: item.videoId,
+        status: 'playing',
+        positionSec: 0,
+        serverUpdatedAtMs: Date.now(),
+      };
+    } else {
+      room.queue.push(item);
+    }
+
+    room.queueVersion = (room.queueVersion || 0) + 1;
+    await this.saveRoom(room);
+    return { room, item, startedImmediately };
+  }
+
+  async removeFromQueue(roomId, itemId) {
+    const room = await this.getRoom(roomId);
+    if (!room || !Array.isArray(room.queue)) return null;
+
+    const index = room.queue.findIndex((it) => it.id === itemId);
+    if (index === -1) return null;
+
+    room.queue.splice(index, 1);
+    room.queueVersion = (room.queueVersion || 0) + 1;
+    await this.saveRoom(room);
+    return room;
+  }
+
+  async skipQueue(roomId) {
+    const room = await this.getRoom(roomId);
+    if (!room) return null;
+    if (!Array.isArray(room.queue)) room.queue = [];
+
+    const nextItem = room.queue.shift() || null;
+    room.nowPlaying = nextItem;
+    room.queueVersion = (room.queueVersion || 0) + 1;
+
+    if (nextItem) {
+      room.playerState = {
+        videoId: nextItem.videoId,
+        status: 'playing',
+        positionSec: 0,
+        serverUpdatedAtMs: Date.now(),
+      };
+    } else {
+      room.playerState = {
+        videoId: '',
+        status: 'paused',
+        positionSec: 0,
+        serverUpdatedAtMs: Date.now(),
+      };
+    }
+
+    await this.saveRoom(room);
+    return room;
+  }
+
+  async endedQueue(roomId, itemId) {
+    const room = await this.getRoom(roomId);
+    if (!room || !room.nowPlaying) return null;
+
+    // De-duplication check: ignore if itemId does not match current nowPlaying.id
+    if (room.nowPlaying.id !== itemId) {
+      return null;
+    }
+
+    const nextItem = Array.isArray(room.queue) ? room.queue.shift() || null : null;
+    room.nowPlaying = nextItem;
+    room.queueVersion = (room.queueVersion || 0) + 1;
+
+    if (nextItem) {
+      room.playerState = {
+        videoId: nextItem.videoId,
+        status: 'playing',
+        positionSec: 0,
+        serverUpdatedAtMs: Date.now(),
+      };
+    } else {
+      room.playerState = {
+        videoId: '',
+        status: 'paused',
+        positionSec: 0,
+        serverUpdatedAtMs: Date.now(),
+      };
+    }
+
+    await this.saveRoom(room);
+    return room;
   }
 
   async deleteRoom(roomId) {

@@ -12,6 +12,9 @@ export const useAppStore = create((set) => ({
     positionSec: 0,
     serverUpdatedAtMs: 0,
   },
+  queue: [],
+  nowPlaying: null,
+  queueVersion: 0,
   serverOffsetMs: 0,
   setSession: ({ token, roomId, memberId, displayName }) => {
     if (typeof window !== 'undefined') {
@@ -24,7 +27,15 @@ export const useAppStore = create((set) => ({
       if (displayName) localStorage.setItem('afterspot_displayName', displayName);
       else localStorage.removeItem('afterspot_displayName');
     }
-    set({ token, roomId, memberId, displayName });
+    set({
+      token,
+      roomId,
+      memberId,
+      displayName,
+      queue: [],
+      nowPlaying: null,
+      queueVersion: 0,
+    });
   },
   clearSession: () => {
     if (typeof window !== 'undefined') {
@@ -45,9 +56,40 @@ export const useAppStore = create((set) => ({
         positionSec: 0,
         serverUpdatedAtMs: 0,
       },
+      queue: [],
+      nowPlaying: null,
+      queueVersion: 0,
     });
   },
-  setMembers: (members) => set({ members }),
+  setMembers: (members) => {
+    let list = [];
+    if (Array.isArray(members)) {
+      list = members;
+    } else if (members && Array.isArray(members.members)) {
+      list = members.members;
+    } else if (members && typeof members === 'object') {
+      list = Object.values(members);
+    }
+    set({ members: list });
+  },
+  setQueueUpdate: ({ queue, nowPlaying, version }) =>
+    set((state) => {
+      // Reject only if incoming version is strictly smaller than an active version > 1
+      if (
+        typeof version === 'number' &&
+        typeof state.queueVersion === 'number' &&
+        state.queueVersion > 1 &&
+        version > 0 &&
+        version < state.queueVersion
+      ) {
+        return state;
+      }
+      return {
+        queue: Array.isArray(queue) ? queue : [],
+        nowPlaying: nowPlaying !== undefined ? nowPlaying : state.nowPlaying,
+        queueVersion: typeof version === 'number' ? version : state.queueVersion,
+      };
+    }),
   setPlayerState: (playerState) =>
     set((prev) => {
       const next = { ...prev.playerState, ...playerState };

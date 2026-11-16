@@ -87,7 +87,13 @@ export function YouTubePlayer({ socket, onOpenSearch }) {
     const state = event.data;
     const player = event.target;
 
-    if (state === 1) {
+    if (state === 0) {
+      // Track ended: emit queue:ended with the current nowPlaying item id for de-duplicated auto-advance
+      const currentNowPlaying = useAppStore.getState().nowPlaying;
+      if (socket && currentNowPlaying?.id) {
+        socket.emit('queue:ended', { itemId: currentNowPlaying.id });
+      }
+    } else if (state === 1) {
       // playing
       setIsAutoplayBlocked(false);
       const dur = await player.getDuration();

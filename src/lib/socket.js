@@ -1,34 +1,32 @@
 import { io } from 'socket.io-client';
-
-const rawUrl =
-  import.meta.env.VITE_API_URL ||
-  import.meta.env.API_URL ||
-  import.meta.env.VITE_BACKEND_URL ||
-  import.meta.env.BACKEND_URL ||
-  '';
-const API_URL = rawUrl ? rawUrl.replace(/\/+$/, '') : '';
+import { getBackendUrl } from './api';
 
 let activeSocket = null;
 
 export const getSocket = (token) => {
+  const backendUrl = getBackendUrl();
+
   if (activeSocket) {
     if (token && activeSocket.auth?.token !== token) {
       activeSocket.auth = { token };
       if (activeSocket.connected) {
-        activeSocket.disconnect().connect();
+        activeSocket.disconnect();
       }
+      activeSocket.connect();
+    } else if (!activeSocket.connected && !activeSocket.connecting) {
+      activeSocket.connect();
     }
     return activeSocket;
   }
 
-  activeSocket = io(API_URL || undefined, {
+  activeSocket = io(backendUrl || undefined, {
     autoConnect: false,
     auth: {
       token,
     },
-    transports: ['websocket', 'polling'],
+    transports: ['polling', 'websocket'],
     reconnection: true,
-    reconnectionAttempts: 10,
+    reconnectionAttempts: 15,
     reconnectionDelay: 1000,
   });
 

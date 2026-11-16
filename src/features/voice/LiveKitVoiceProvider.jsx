@@ -75,8 +75,17 @@ export function LiveKitVoiceProvider({ children }) {
   };
 
   const handleError = (error) => {
-    console.warn('[LiveKitVoiceProvider] Connection error:', error?.message || error);
-    setConnectionError(error?.message || 'Voice connection failed');
+    const msg = error?.message || String(error);
+    // Ignore normal lifecycle disconnects (unmounting or navigating away)
+    if (
+      msg.includes('Client initiated disconnect') ||
+      msg.includes('user initiated disconnect') ||
+      msg.includes('aborted')
+    ) {
+      return;
+    }
+    console.warn('[LiveKitVoiceProvider] Connection error:', msg);
+    setConnectionError(msg || 'Voice connection failed');
     setIsConnected(false);
   };
 

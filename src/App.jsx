@@ -6,6 +6,7 @@ import { TooltipProvider } from './components/Tooltip';
 import LobbyPage from './routes/LobbyPage';
 import RoomPage from './routes/RoomPage';
 import { MicDebugPanel } from './components/MicDebugPanel';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,11 +23,13 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<LobbyPage />} />
-            <Route path="/room/:roomId" element={<RoomPage />} />
-          </Routes>
-          <MicDebugPanel />
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/" element={<LobbyPage />} />
+              <Route path="/room/:roomId" element={<RoomPage />} />
+            </Routes>
+            <MicDebugPanel />
+          </ErrorBoundary>
         </BrowserRouter>
         <Toaster
           position="top-center"

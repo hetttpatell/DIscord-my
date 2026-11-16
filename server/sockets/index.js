@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { z } from 'zod';
 import { verifySessionToken } from '../services/security.js';
 import { roomStore } from '../services/roomStore.js';
@@ -5,6 +6,30 @@ import { roomStore } from '../services/roomStore.js';
 // Schemas for socket events
 const setVideoSchema = z.object({
   videoId: z.string().trim().min(1).max(64),
+  title: z.string().nullish(),
+  channel: z.string().nullish(),
+  thumbnail: z.string().nullish(),
+  thumbnailUrl: z.string().nullish(),
+  durationSec: z.union([z.number(), z.string(), z.null()]).optional(),
+  durationSeconds: z.union([z.number(), z.string(), z.null()]).optional(),
+});
+
+const queueAddSchema = z.object({
+  videoId: z.string().trim().min(1).max(64),
+  title: z.string().nullish(),
+  channel: z.string().nullish(),
+  thumbnail: z.string().nullish(),
+  thumbnailUrl: z.string().nullish(),
+  durationSec: z.union([z.number(), z.string(), z.null()]).optional(),
+  durationSeconds: z.union([z.number(), z.string(), z.null()]).optional(),
+});
+
+const queueRemoveSchema = z.object({
+  itemId: z.string().min(1),
+});
+
+const queueEndedSchema = z.object({
+  itemId: z.string().min(1),
 });
 
 const positionSchema = z.object({
@@ -70,6 +95,13 @@ export function setupSocketIO(io) {
       // Send authoritative player state snapshot to connecting socket
       socket.emit('player:state', room.playerState);
 
+      // Send queue snapshot to connecting socket
+      socket.emit('queue:update', {
+        queue: room.queue || [],
+        nowPlaying: room.nowPlaying || null,
+        version: room.queueVersion || 1,
+      });
+
       // Broadcast updated member list to all room participants
       io.to(roomId).emit(
         'room:members',
@@ -105,8 +137,110 @@ export function setupSocketIO(io) {
         positionSec: 0,
       });
 
+      const currentRoom = await roomStore.getRoom(roomId);
+      if (currentRoom) {
+        currentRoom.nowPlaying = {
+          id: crypto.randomUUID(),
+          videoId: parsed.data.videoId,
+          title: parsed.data.title || 'Untitled',
+          channel: parsed.data.channel || '',
+          thumbnail:
+            parsed.data.thumbnailUrl ||
+            parsed.data.thumbnail ||
+            `https://i.ytimg.com/vi/${parsed.data.videoId}/hqdefault.jpg`,
+          durationSeconds: Number(parsed.data.durationSec || parsed.data.durationSeconds || 0) || 0,
+          addedById: memberId,
+          addedByName: displayName,
+          addedAt: Date.now(),
+        };
+        currentRoom.queueVersion = (currentRoom.queueVersion || 0) + 1;
+        await roomStore.saveRoom(currentRoom);
+        io.to(roomId).emit('queue:update', {
+          queue: currentRoom.queue || [],
+          nowPlaying: currentRoom.nowPlaying,
+          version: currentRoom.queueVersion,
+        });
+      }
+
       if (updated) {
         io.to(roomId).emit('player:state', updated);
+      }
+    });
+
+    // queue:add
+    socket.on('queue:add', async (payload) => {
+      if (!isAllowed()) return;
+      const parsed = queueAddSchema.safeParse(payload);
+      if (!parsed.success) {
+        socket.emit('queue:error', { message: 'Invalid video payload' });
+        return;
+      }
+
+      try {
+        const result = await roomStore.addToQueue(roomId, parsed.data, {
+          memberId,
+          displayName,
+        });
+        if (result?.room) {
+          io.to(roomId).emit('queue:update', {
+            queue: result.room.queue || [],
+            nowPlaying: result.room.nowPlaying || null,
+            version: result.room.queueVersion,
+          });
+
+          if (result.startedImmediately) {
+            io.to(roomId).emit('player:state', result.room.playerState);
+          }
+        }
+      } catch (err) {
+        socket.emit('queue:error', { message: err.message });
+      }
+    });
+
+    // queue:remove
+    socket.on('queue:remove', async (payload) => {
+      if (!isAllowed()) return;
+      const parsed = queueRemoveSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      const updatedRoom = await roomStore.removeFromQueue(roomId, parsed.data.itemId);
+      if (updatedRoom) {
+        io.to(roomId).emit('queue:update', {
+          queue: updatedRoom.queue || [],
+          nowPlaying: updatedRoom.nowPlaying || null,
+          version: updatedRoom.queueVersion,
+        });
+      }
+    });
+
+    // queue:skip
+    socket.on('queue:skip', async () => {
+      if (!isAllowed()) return;
+      const updatedRoom = await roomStore.skipQueue(roomId);
+      if (updatedRoom) {
+        io.to(roomId).emit('queue:update', {
+          queue: updatedRoom.queue || [],
+          nowPlaying: updatedRoom.nowPlaying || null,
+          version: updatedRoom.queueVersion,
+        });
+        io.to(roomId).emit('player:state', updatedRoom.playerState);
+      }
+    });
+
+    // queue:ended
+    socket.on('queue:ended', async (payload) => {
+      if (!isAllowed()) return;
+      const parsed = queueEndedSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      const updatedRoom = await roomStore.endedQueue(roomId, parsed.data.itemId);
+      if (updatedRoom) {
+        io.to(roomId).emit('queue:update', {
+          queue: updatedRoom.queue || [],
+          nowPlaying: updatedRoom.nowPlaying || null,
+          version: updatedRoom.queueVersion,
+        });
+        io.to(roomId).emit('player:state', updatedRoom.playerState);
       }
     });
 

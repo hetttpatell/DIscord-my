@@ -1,31 +1,36 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import { useAppStore } from '../stores/useAppStore';
-import { createSocket } from '../lib/socket';
+import { createSocket, disconnectSocket } from '../lib/socket';
 import { RoomTopBar } from '../features/room/RoomTopBar';
 import { RoomDock } from '../features/room/RoomDock';
 import { MemberList } from '../features/room/MemberList';
 import { YouTubePlayer } from '../features/player/YouTubePlayer';
 import { YouTubeSearchSheet } from '../features/search/YouTubeSearchSheet';
+import { QueueSheet } from '../features/queue/QueueSheet';
 import { LiveKitVoiceProvider } from '../features/voice/LiveKitVoiceProvider';
 import { Sheet } from '../components/Sheet';
 import { stopMicrophone } from '../lib/microphone';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 export default function RoomPage() {
   const { roomId: urlRoomId } = useParams();
   const navigate = useNavigate();
-  const {
-    token,
-    roomId,
-    memberId,
-    members,
-    setMembers,
-    clearSession,
-  } = useAppStore();
+  const token = useAppStore((s) => s.token);
+  const roomId = useAppStore((s) => s.roomId);
+  const memberId = useAppStore((s) => s.memberId);
+  const members = useAppStore((s) => s.members);
+  const queue = useAppStore((s) => s.queue);
+  const nowPlaying = useAppStore((s) => s.nowPlaying);
+  const clearSession = useAppStore((s) => s.clearSession);
+
+  const totalQueueCount = queue.length + (nowPlaying ? 1 : 0);
 
   const socket = useMemo(() => (token ? createSocket(token) : null), [token]);
   const [isMembersOpen, setIsMembersOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isQueueOpen, setIsQueueOpen] = useState(false);
 
   // Validate session on mount
   useEffect(() => {
@@ -33,6 +38,18 @@ export default function RoomPage() {
       navigate('/');
     }
   }, [token, roomId, urlRoomId, navigate]);
+
+  // Clean up on window close / page refresh
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      disconnectSocket();
+      stopMicrophone();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
 
   // Connect Socket.IO
   useEffect(() => {
@@ -43,33 +60,60 @@ export default function RoomPage() {
     }
 
     const handleMembers = (updatedMembers) => {
-      setMembers(updatedMembers);
+      useAppStore.getState().setMembers(updatedMembers);
     };
 
     const handleVoiceState = ({ memberId: targetId, isMicEnabled }) => {
       if (typeof window !== 'undefined' && isMicEnabled) {
         window.__remoteAudioSubscribed = true;
       }
-      useAppStore.setState((prev) => ({
-        members: prev.members.map((m) =>
-          m.memberId === targetId ? { ...m, isMicEnabled, isSpeaking: isMicEnabled } : m
-        ),
-      }));
+      useAppStore.setState((prev) => {
+        const currentList = Array.isArray(prev.members)
+          ? prev.members
+          : (prev.members && Array.isArray(prev.members.members)
+            ? prev.members.members
+            : Object.values(prev.members || {}));
+        return {
+          members: currentList.map((m) =>
+            m.memberId === targetId || m.id === targetId
+              ? { ...m, isMicEnabled, isSpeaking: isMicEnabled }
+              : m
+          ),
+        };
+      });
+    };
+
+    const handleQueueUpdate = ({ queue: updatedQueue, nowPlaying: updatedNowPlaying, version }) => {
+      useAppStore.getState().setQueueUpdate({
+        queue: updatedQueue,
+        nowPlaying: updatedNowPlaying,
+        version,
+      });
+    };
+
+    const handleQueueError = ({ message }) => {
+      toast.error(message || 'Queue error');
     };
 
     socket.on('room:members', handleMembers);
     socket.on('voice:state', handleVoiceState);
-    socket.connect();
+    socket.on('queue:update', handleQueueUpdate);
+    socket.on('queue:error', handleQueueError);
+
+    if (!socket.connected && !socket.connecting) {
+      socket.connect();
+    }
 
     return () => {
       socket.off('room:members', handleMembers);
       socket.off('voice:state', handleVoiceState);
-      socket.disconnect();
-      stopMicrophone();
+      socket.off('queue:update', handleQueueUpdate);
+      socket.off('queue:error', handleQueueError);
     };
-  }, [socket, setMembers]);
+  }, [socket]);
 
   const handleLeave = () => {
+    disconnectSocket();
     stopMicrophone();
     clearSession();
     navigate('/');
@@ -81,7 +125,7 @@ export default function RoomPage() {
         {/* Top Bar */}
         <RoomTopBar
           roomId={roomId || urlRoomId || ''}
-          membersCount={members.length || 1}
+          membersCount={Array.isArray(members) ? members.length : 1}
           onLeave={handleLeave}
         />
 
@@ -103,10 +147,12 @@ export default function RoomPage() {
             aria-label="Room Participants"
             className="hidden lg:block w-80 h-[500px] rounded-2xl bg-[#141419]/90 border border-white/10 backdrop-blur-md overflow-hidden shrink-0"
           >
-            <MemberList
-              members={members}
-              currentMemberId={memberId}
-            />
+            <ErrorBoundary>
+              <MemberList
+                members={members}
+                currentMemberId={memberId}
+              />
+            </ErrorBoundary>
           </aside>
         </main>
 
@@ -115,13 +161,15 @@ export default function RoomPage() {
           open={isMembersOpen}
           onOpenChange={setIsMembersOpen}
           title="Room Members"
-          description={`${members.length} participant(s) in this lounge`}
+          description={`${Array.isArray(members) ? members.length : 1} participant(s) in this lounge`}
         >
           <div className="h-64">
-            <MemberList
-              members={members}
-              currentMemberId={memberId}
-            />
+            <ErrorBoundary>
+              <MemberList
+                members={members}
+                currentMemberId={memberId}
+              />
+            </ErrorBoundary>
           </div>
         </Sheet>
 
@@ -132,11 +180,24 @@ export default function RoomPage() {
           socket={socket}
         />
 
+        {/* Playback Queue Drawer */}
+        <QueueSheet
+          open={isQueueOpen}
+          onOpenChange={setIsQueueOpen}
+          socket={socket}
+          onOpenSearch={() => {
+            setIsQueueOpen(false);
+            setIsSearchOpen(true);
+          }}
+        />
+
         {/* Bottom Dock */}
         <RoomDock
           onOpenSearch={() => setIsSearchOpen(true)}
+          onOpenQueue={() => setIsQueueOpen(true)}
           onToggleMembers={() => setIsMembersOpen((prev) => !prev)}
-          membersCount={members.length || 1}
+          queueCount={totalQueueCount}
+          membersCount={Array.isArray(members) ? members.length : 1}
         />
       </div>
     </LiveKitVoiceProvider>

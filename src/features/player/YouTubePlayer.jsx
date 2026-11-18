@@ -1,19 +1,23 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import YouTube from 'react-youtube';
-import { Play, Music } from 'lucide-react';
+import { Play, Music, Maximize2, Minimize2, Users, Smile } from 'lucide-react';
 import { PlayerControls } from './PlayerControls';
+import { FullscreenSlideWindow } from './FullscreenSlideWindow';
 import { useYouTubeSync } from './useYouTubeSync';
 import { useAppStore } from '../../stores/useAppStore';
 
-export function YouTubePlayer({ socket, onOpenSearch }) {
-  const { playerState } = useAppStore();
+export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
+  const { playerState, members, memberId, nowPlaying } = useAppStore();
   const playerRef = useRef(null);
+  const containerRef = useRef(null);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
   const [isAutoplayBlocked, setIsAutoplayBlocked] = useState(false);
+  const [isMobileFullscreen, setIsMobileFullscreen] = useState(false);
+  const [isSlideWindowOpen, setIsSlideWindowOpen] = useState(true);
 
   const {
     emitPlay,
@@ -48,6 +52,78 @@ export function YouTubePlayer({ socket, onOpenSearch }) {
   }, [isPlayerReady, playerState.status]);
 
   const displayTime = playerState.status === 'playing' ? currentTime : (playerState.positionSec || 0);
+
+  const lockLandscape = async () => {
+    try {
+      if (typeof screen !== 'undefined' && screen.orientation && screen.orientation.lock) {
+        await screen.orientation.lock('landscape');
+      }
+    } catch {}
+  };
+
+  const unlockOrientation = () => {
+    try {
+      if (typeof screen !== 'undefined' && screen.orientation && screen.orientation.unlock) {
+        screen.orientation.unlock();
+      }
+    } catch {}
+  };
+
+  const handleEnterFullscreen = useCallback(() => {
+    setIsMobileFullscreen(true);
+    setIsSlideWindowOpen(true);
+    if (typeof document !== 'undefined' && document.documentElement.requestFullscreen && !document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+    lockLandscape();
+  }, []);
+
+  const handleExitFullscreen = useCallback(() => {
+    setIsMobileFullscreen(false);
+    setIsSlideWindowOpen(false);
+    if (typeof document !== 'undefined' && document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
+    unlockOrientation();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      unlockOrientation();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && isMobileFullscreen) {
+        setIsMobileFullscreen(false);
+      }
+    };
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isMobileFullscreen) {
+        handleExitFullscreen();
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMobileFullscreen, handleExitFullscreen]);
+
+  useEffect(() => {
+    if (isMobileFullscreen) {
+      const origOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = origOverflow;
+      };
+    }
+  }, [isMobileFullscreen]);
 
   // Handle Autoplay blocked user tap
   const handleTapToJoinPlayback = useCallback(async () => {
@@ -168,11 +244,78 @@ export function YouTubePlayer({ socket, onOpenSearch }) {
   };
 
   return (
-    <div className="relative w-full flex flex-col bg-[#0B0B10] select-none rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
-      {/* 16:9 Video Container */}
-      <div className="relative w-full aspect-video bg-[#0B0B10] overflow-hidden flex items-center justify-center">
+    <div
+      ref={containerRef}
+      className={
+        isMobileFullscreen
+          ? 'fixed inset-0 z-50 bg-[#0B0B10] flex flex-col justify-between select-none overflow-hidden h-[100dvh] w-screen'
+          : 'relative w-full flex flex-col bg-[#0B0B10] select-none rounded-2xl overflow-hidden border border-white/10 shadow-2xl'
+      }
+    >
+      {/* Top Header Bar in Fullscreen Mode */}
+      {isMobileFullscreen && (
+        <div className="absolute top-0 left-0 right-0 z-50 flex items-center justify-between p-3 sm:p-4 bg-gradient-to-b from-black/85 via-black/50 to-transparent pointer-events-auto">
+          {/* Track Info (Left) */}
+          <div className="flex items-center gap-2 min-w-0 max-w-[50%]">
+            <span className="w-2 h-2 rounded-full bg-[#FF9F1C] animate-pulse shrink-0" />
+            <p className="text-xs sm:text-sm font-semibold text-white truncate">
+              {nowPlaying?.title || 'Now Playing'}
+            </p>
+          </div>
+
+          {/* Action Buttons (Right) */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Slide Window Toggle Button */}
+            <button
+              type="button"
+              onClick={() => setIsSlideWindowOpen((prev) => !prev)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold backdrop-blur-md transition-all active:scale-95 cursor-pointer ${
+                isSlideWindowOpen
+                  ? 'bg-[#2EC4B6]/20 border-[#2EC4B6]/50 text-[#2EC4B6]'
+                  : 'bg-black/70 border-white/20 text-white hover:bg-black/90'
+              }`}
+              aria-label={isSlideWindowOpen ? 'Hide lounge panel' : 'Show lounge panel'}
+              title="Lounge & Reactions"
+            >
+              <Users className="w-3.5 h-3.5 text-[#2EC4B6]" />
+              <span className="hidden sm:inline">Lounge</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-[#2EC4B6]/20 text-[10px] font-mono font-bold text-[#2EC4B6]">
+                {Array.isArray(members) ? members.length : 1}
+              </span>
+              <Smile className="w-3.5 h-3.5 text-[#FF9F1C]" />
+            </button>
+
+            {/* Exit Fullscreen Button on the Right Top */}
+            <button
+              type="button"
+              onClick={handleExitFullscreen}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-black/80 hover:bg-black/95 text-white border border-white/20 shadow-2xl backdrop-blur-md active:scale-95 transition-all cursor-pointer"
+              aria-label="Exit full screen"
+              title="Exit Full Screen"
+            >
+              <Minimize2 className="w-4 h-4 text-[#FF9F1C]" />
+              <span className="text-xs font-semibold">Exit</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Video Container (Aspect 16:9 on normal, centered without overfilling in fullscreen) */}
+      <div
+        className={
+          isMobileFullscreen
+            ? 'relative w-full flex-1 bg-[#0B0B10] overflow-hidden flex items-center justify-center p-2 sm:p-4 min-h-0'
+            : 'relative w-full aspect-video bg-[#0B0B10] overflow-hidden flex items-center justify-center'
+        }
+      >
         {playerState.videoId ? (
-          <div className="absolute inset-0 w-full h-full pointer-events-none">
+          <div
+            className={
+              isMobileFullscreen
+                ? 'relative w-full max-w-4xl max-h-[76vh] aspect-video pointer-events-none rounded-2xl overflow-hidden shadow-2xl bg-black border border-white/10'
+                : 'absolute inset-0 w-full h-full pointer-events-none'
+            }
+          >
             <YouTube
               videoId={playerState.videoId}
               opts={youtubeOpts}
@@ -207,6 +350,20 @@ export function YouTubePlayer({ socket, onOpenSearch }) {
           </div>
         )}
 
+        {/* Option like YouTube on the screen for mobile full screen */}
+        {!isMobileFullscreen && playerState.videoId && (
+          <button
+            type="button"
+            onClick={handleEnterFullscreen}
+            className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-black/75 hover:bg-black/90 text-white border border-white/20 backdrop-blur-md transition-all active:scale-95 cursor-pointer shadow-lg lg:hidden"
+            aria-label="Enter mobile full screen"
+            title="Full Screen"
+          >
+            <Maximize2 className="w-3.5 h-3.5 text-[#FF9F1C]" />
+            <span className="text-[11px] font-semibold text-white/95">Full</span>
+          </button>
+        )}
+
         {/* Mobile Autoplay Policy Tap-to-Join Overlay */}
         {isAutoplayBlocked && (
           <button
@@ -224,6 +381,19 @@ export function YouTubePlayer({ socket, onOpenSearch }) {
         )}
       </div>
 
+      {/* Floating Slide Window (Emoji & Members Panel) in Fullscreen */}
+      {isMobileFullscreen && (
+        <FullscreenSlideWindow
+          isOpen={isSlideWindowOpen}
+          onClose={() => setIsSlideWindowOpen(false)}
+          onOpen={() => setIsSlideWindowOpen(true)}
+          socket={socket}
+          members={members}
+          currentMemberId={memberId}
+          onLocalReaction={onLocalReaction}
+        />
+      )}
+
       {/* Synchronized Custom Controls */}
       <PlayerControls
         isPlaying={playerState.status === 'playing'}
@@ -235,6 +405,8 @@ export function YouTubePlayer({ socket, onOpenSearch }) {
         onSeek={handleSeek}
         onVolumeChange={handleVolumeChange}
         onToggleMute={handleToggleMute}
+        isFullscreen={isMobileFullscreen}
+        onToggleFullscreen={isMobileFullscreen ? handleExitFullscreen : handleEnterFullscreen}
       />
     </div>
   );

@@ -76,6 +76,34 @@
   animation: fadeIn 0.2s ease-out forwards;
 }
 
+@keyframes floatReaction {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.6) rotate(0deg);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(-40px) scale(1.25) rotate(var(--sway-rot, 6deg));
+  }
+  45% {
+    opacity: 1;
+    transform: translateY(-130px) scale(1.05) rotate(calc(var(--sway-rot, 6deg) * -1));
+  }
+  75% {
+    opacity: 0.85;
+    transform: translateY(-230px) scale(0.95) rotate(var(--sway-rot, 6deg));
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-330px) scale(0.8) rotate(calc(var(--sway-rot, 6deg) * -1));
+  }
+}
+
+.animate-float-reaction {
+  animation: floatReaction 2.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: transform, opacity;
+}
+
 /* Respect user's reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {

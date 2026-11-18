@@ -44,6 +44,10 @@ const voiceStateSchema = z.object({
   isMicEnabled: z.boolean(),
 });
 
+const reactionSchema = z.object({
+  emoji: z.string().trim().min(1).max(16),
+});
+
 // Per-socket rate limiter: max 30 events per 5 seconds
 function createSocketRateLimiter(maxEvents = 30, windowMs = 5000) {
   const eventTimestamps = [];
@@ -303,6 +307,21 @@ export function setupSocketIO(io) {
         memberId,
         displayName,
         isMicEnabled: parsed.data.isMicEnabled,
+      });
+    });
+
+    // reaction:send
+    socket.on('reaction:send', (payload) => {
+      if (!isAllowed()) return;
+      const parsed = reactionSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      io.to(roomId).emit('reaction:new', {
+        id: crypto.randomUUID(),
+        emoji: parsed.data.emoji,
+        senderId: memberId,
+        senderName: displayName,
+        timestamp: Date.now(),
       });
     });
 

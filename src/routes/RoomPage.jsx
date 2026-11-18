@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAppStore } from '../stores/useAppStore';
@@ -10,6 +10,8 @@ import { YouTubePlayer } from '../features/player/YouTubePlayer';
 import { YouTubeSearchSheet } from '../features/search/YouTubeSearchSheet';
 import { QueueSheet } from '../features/queue/QueueSheet';
 import { LiveKitVoiceProvider } from '../features/voice/LiveKitVoiceProvider';
+import { FloatingReactions } from '../features/reactions/FloatingReactions';
+import { ReactionPicker } from '../features/reactions/ReactionPicker';
 import { Sheet } from '../components/Sheet';
 import { stopMicrophone } from '../lib/microphone';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -28,6 +30,7 @@ export default function RoomPage() {
   const totalQueueCount = queue.length + (nowPlaying ? 1 : 0);
 
   const socket = useMemo(() => (token ? createSocket(token) : null), [token]);
+  const localReactionRef = useRef(null);
   const [isMembersOpen, setIsMembersOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
@@ -139,6 +142,12 @@ export default function RoomPage() {
             <YouTubePlayer
               socket={socket}
               onOpenSearch={() => setIsSearchOpen(true)}
+              onLocalReaction={(data) => {
+                localReactionRef.current?.({
+                  ...data,
+                  senderName: useAppStore.getState().displayName || 'You',
+                });
+              }}
             />
           </section>
 
@@ -188,6 +197,23 @@ export default function RoomPage() {
           onOpenSearch={() => {
             setIsQueueOpen(false);
             setIsSearchOpen(true);
+          }}
+        />
+
+        {/* Floating Animated Reactions */}
+        <FloatingReactions
+          socket={socket}
+          onLocalReactionRef={localReactionRef}
+        />
+
+        {/* Reaction Floating Bar on the Screen */}
+        <ReactionPicker
+          socket={socket}
+          onTriggerLocal={(data) => {
+            localReactionRef.current?.({
+              ...data,
+              senderName: useAppStore.getState().displayName || 'You',
+            });
           }}
         />
 

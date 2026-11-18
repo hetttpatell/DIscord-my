@@ -203,12 +203,12 @@ function LiveKitMicButton({ className }) {
         {isMicActive ? (
           <>
             <Mic className="w-4 h-4 shrink-0 text-[#0B0B10]" />
-            <span className="text-xs text-[#0B0B10] font-bold truncate">On Air</span>
+            <span className="text-[11px] sm:text-xs text-[#0B0B10] font-bold whitespace-nowrap">On Air</span>
           </>
         ) : (
           <>
             <MicOff className="w-4 h-4 shrink-0 text-[#FF5A5F]" />
-            <span className="text-xs truncate">Muted</span>
+            <span className="text-[11px] sm:text-xs font-semibold whitespace-nowrap">Muted</span>
           </>
         )}
       </Button>
@@ -382,12 +382,12 @@ function FallbackMicButton({ className }) {
         {isMicActive ? (
           <>
             <Mic className="w-4 h-4 shrink-0 text-[#0B0B10]" />
-            <span className="text-xs text-[#0B0B10] font-bold truncate">On Air</span>
+            <span className="text-[11px] sm:text-xs text-[#0B0B10] font-bold whitespace-nowrap">On Air</span>
           </>
         ) : (
           <>
             <MicOff className="w-4 h-4 shrink-0 text-[#FF5A5F]" />
-            <span className="text-xs truncate">Muted</span>
+            <span className="text-[11px] sm:text-xs font-semibold whitespace-nowrap">Muted</span>
           </>
         )}
       </Button>

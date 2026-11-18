@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Volume2, VolumeX } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize2, Minimize2 } from 'lucide-react';
 import { Slider } from '../../components/Slider';
 import { Button } from '../../components/Button';
 
@@ -26,6 +26,8 @@ export function PlayerControls({
   onSeek,
   onVolumeChange,
   onToggleMute,
+  isFullscreen = false,
+  onToggleFullscreen,
 }) {
   return (
     <div className="w-full bg-[#141419]/90 border-t border-white/10 px-4 py-2.5 backdrop-blur-md flex flex-col gap-2">
@@ -63,30 +65,48 @@ export function PlayerControls({
           </Button>
         </div>
 
-        {/* Volume controls */}
-        <div className="flex items-center gap-2 max-w-[160px] w-full">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onToggleMute}
-            aria-label={isMuted ? 'Unmute volume' : 'Mute volume'}
-            className="text-[#9A978F] hover:text-[#F4F1EA]"
-          >
-            {isMuted || volume === 0 ? (
-              <VolumeX className="w-4 h-4 text-[#FF5A5F]" />
-            ) : (
-              <Volume2 className="w-4 h-4" />
-            )}
-          </Button>
-          <Slider
-            value={[isMuted ? 0 : volume]}
-            min={0}
-            max={100}
-            step={1}
-            onValueChange={([val]) => onVolumeChange(val)}
-            aria-label="Volume level"
-            className="w-20"
-          />
+        {/* Volume controls & Fullscreen toggle */}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 max-w-[150px] w-full">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onToggleMute}
+              aria-label={isMuted ? 'Unmute volume' : 'Mute volume'}
+              className="text-[#9A978F] hover:text-[#F4F1EA]"
+            >
+              {isMuted || volume === 0 ? (
+                <VolumeX className="w-4 h-4 text-[#FF5A5F]" />
+              ) : (
+                <Volume2 className="w-4 h-4" />
+              )}
+            </Button>
+            <Slider
+              value={[isMuted ? 0 : volume]}
+              min={0}
+              max={100}
+              step={1}
+              onValueChange={([val]) => onVolumeChange(val)}
+              aria-label="Volume level"
+              className="w-16 sm:w-20"
+            />
+          </div>
+
+          {onToggleFullscreen && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onToggleFullscreen}
+              aria-label={isFullscreen ? 'Exit full screen' : 'Enter full screen'}
+              className="text-[#9A978F] hover:text-[#F4F1EA] shrink-0"
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-4 h-4 text-[#FF9F1C]" />
+              ) : (
+                <Maximize2 className="w-4 h-4" />
+              )}
+            </Button>
+          )}
         </div>
       </div>
     </div>

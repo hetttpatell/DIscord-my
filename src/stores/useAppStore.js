@@ -104,22 +104,10 @@ export const useAppStore = create((set) => ({
     set({ members: list });
   },
   setQueueUpdate: ({ queue, nowPlaying, version }) =>
-    set((state) => {
-      // Reject only if incoming version is strictly smaller than an active version > 1
-      if (
-        typeof version === 'number' &&
-        typeof state.queueVersion === 'number' &&
-        state.queueVersion > 1 &&
-        version > 0 &&
-        version < state.queueVersion
-      ) {
-        return state;
-      }
-      return {
-        queue: Array.isArray(queue) ? queue : [],
-        nowPlaying: nowPlaying !== undefined ? nowPlaying : state.nowPlaying,
-        queueVersion: typeof version === 'number' ? version : state.queueVersion,
-      };
+    set({
+      queue: Array.isArray(queue) ? queue : [],
+      nowPlaying: nowPlaying !== undefined ? nowPlaying : null,
+      queueVersion: typeof version === 'number' ? version : 1,
     }),
   setPlayerState: (playerState) =>
     set((prev) => {

@@ -19,6 +19,8 @@ function formatDuration(sec) {
 export function YouTubeSearchSheet({ open, onOpenChange, socket: propSocket, onOpenLocalMediaModal }) {
   const socket = propSocket || (typeof window !== 'undefined' ? window.__socket : null);
   const token = useAppStore((s) => s.token);
+  const queue = useAppStore((s) => s.queue);
+  const nowPlaying = useAppStore((s) => s.nowPlaying);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedQuery] = useDebounce(searchTerm, 350);
 
@@ -71,6 +73,20 @@ export function YouTubeSearchSheet({ open, onOpenChange, socket: propSocket, onO
       toast.error('Connecting to room...');
       return;
     }
+
+    const isCurrentlyPlaying = nowPlaying?.videoId === video.videoId;
+    const isAlreadyInQueue = queue.some((it) => it.videoId === video.videoId);
+
+    if (isCurrentlyPlaying) {
+      toast.info(`"${video.title}" is currently playing`);
+      return;
+    }
+
+    if (isAlreadyInQueue) {
+      toast.info(`"${video.title}" is already in the queue`);
+      return;
+    }
+
     activeSock.emit('queue:add', {
       videoId: video.videoId,
       title: video.title,
@@ -214,56 +230,71 @@ export function YouTubeSearchSheet({ open, onOpenChange, socket: propSocket, onO
             {/* Results List */}
             {!isLoading && !isError && results.length > 0 && (
               <div className="space-y-2 pb-6" role="list">
-                {results.map((video) => (
-                  <div
-                    key={video.videoId}
-                    className="w-full flex items-center justify-between p-2 rounded-xl bg-[#0B0B10]/60 hover:bg-[#1C1C24] border border-white/5 hover:border-white/10 transition-all group"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleSelect(video)}
-                      className="flex-1 flex items-center gap-3 text-left cursor-pointer min-h-[44px] overflow-hidden"
-                      aria-label={`Play ${video.title} now`}
-                    >
-                      {/* Thumbnail with duration */}
-                      <div className="relative w-24 h-14 shrink-0 rounded-lg overflow-hidden bg-black/40">
-                        <img
-                          src={video.thumbnailUrl}
-                          alt=""
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                          loading="lazy"
-                        />
-                        {video.durationSec > 0 && (
-                          <span className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/80 text-[10px] font-mono text-white flex items-center gap-0.5">
-                            <Clock className="w-2.5 h-2.5" />
-                            {formatDuration(video.durationSec)}
-                          </span>
-                        )}
-                      </div>
+                {results.map((video) => {
+                  const isCurrentlyPlaying = nowPlaying?.videoId === video.videoId;
+                  const isAlreadyInQueue = queue.some((it) => it.videoId === video.videoId);
 
-                      {/* Metadata */}
-                      <div className="flex-1 min-w-0 pr-2">
-                        <p className="text-sm font-semibold text-[#F4F1EA] truncate group-hover:text-[#FF9F1C] transition-colors">
-                          {video.title}
-                        </p>
-                        <p className="text-xs text-[#9A978F] truncate mt-0.5">
-                          {video.channel}
-                        </p>
-                      </div>
-                    </button>
-
-                    {/* Actions: Add to Queue */}
-                    <button
-                      type="button"
-                      onClick={(e) => handleAddToQueue(e, video)}
-                      className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/5 hover:bg-[#FF9F1C] hover:text-[#0B0B10] text-[#F4F1EA] text-xs font-semibold border border-white/10 transition-colors min-h-[44px] cursor-pointer ml-1"
-                      aria-label={`Add ${video.title} to queue`}
+                  return (
+                    <div
+                      key={video.videoId}
+                      className="w-full flex items-center justify-between p-2 rounded-xl bg-[#0B0B10]/60 hover:bg-[#1C1C24] border border-white/5 hover:border-white/10 transition-all group"
                     >
-                      <ListPlus className="w-4 h-4 shrink-0" />
-                      <span className="text-xs font-medium">+ Queue</span>
-                    </button>
-                  </div>
-                ))}
+                      <button
+                        type="button"
+                        onClick={() => handleSelect(video)}
+                        className="flex-1 flex items-center gap-3 text-left cursor-pointer min-h-[44px] overflow-hidden"
+                        aria-label={`Play ${video.title} now`}
+                      >
+                        {/* Thumbnail with duration */}
+                        <div className="relative w-24 h-14 shrink-0 rounded-lg overflow-hidden bg-black/40">
+                          <img
+                            src={video.thumbnailUrl}
+                            alt=""
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            loading="lazy"
+                          />
+                          {video.durationSec > 0 && (
+                            <span className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/80 text-[10px] font-mono text-white flex items-center gap-0.5">
+                              <Clock className="w-2.5 h-2.5" />
+                              {formatDuration(video.durationSec)}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Metadata */}
+                        <div className="flex-1 min-w-0 pr-2">
+                          <p className="text-sm font-semibold text-[#F4F1EA] truncate group-hover:text-[#FF9F1C] transition-colors">
+                            {video.title}
+                          </p>
+                          <p className="text-xs text-[#9A978F] truncate mt-0.5">
+                            {video.channel}
+                          </p>
+                        </div>
+                      </button>
+
+                      {/* Actions: Add to Queue */}
+                      {isCurrentlyPlaying ? (
+                        <span className="shrink-0 px-2.5 py-1.5 rounded-lg bg-[#2EC4B6]/15 border border-[#2EC4B6]/30 text-[#2EC4B6] text-[11px] font-semibold flex items-center gap-1 ml-1">
+                          Playing
+                        </span>
+                      ) : isAlreadyInQueue ? (
+                        <span className="shrink-0 px-2.5 py-1.5 rounded-lg bg-[#FF9F1C]/15 border border-[#FF9F1C]/30 text-[#FF9F1C] text-[11px] font-semibold flex items-center gap-1 ml-1">
+                          In Queue
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => handleAddToQueue(e, video)}
+                          className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/5 hover:bg-[#FF9F1C] hover:text-[#0B0B10] text-[#F4F1EA] text-xs font-semibold border border-white/10 transition-colors min-h-[44px] cursor-pointer ml-1"
+                          aria-label={`Add ${video.title} to queue`}
+                        >
+                          <ListPlus className="w-4 h-4 shrink-0" />
+                          <span className="text-xs font-medium">+ Queue</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

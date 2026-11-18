@@ -7,6 +7,7 @@ export function useYouTubeSync({ socket, playerRef, isPlayerReady }) {
   const { playerState, setPlayerState, setServerOffsetMs, serverOffsetMs } = useAppStore();
   const isApplyingRemoteChange = useRef(false);
   const syncIntervalRef = useRef(null);
+  const currentLoadedVideoIdRef = useRef(playerState.videoId);
 
   // 1. Clock Offset Calculation via 3-sample Ping Median
   useEffect(() => {
@@ -78,20 +79,31 @@ export function useYouTubeSync({ socket, playerRef, isPlayerReady }) {
 
       isApplyingRemoteChange.current = true;
 
-      try {
-        // Change video if different
-        const currentVideoUrl = (await player.getVideoUrl?.()) || '';
-        const currentVideoId = currentVideoUrl.includes('v=')
-          ? currentVideoUrl.split('v=')[1]?.split('&')[0]
-          : '';
+      const isVideoChange = remoteState.videoId !== currentLoadedVideoIdRef.current;
+      currentLoadedVideoIdRef.current = remoteState.videoId;
 
-        if (remoteState.videoId && currentVideoId !== remoteState.videoId) {
+      try {
+        if (isVideoChange) {
+          if (!remoteState.videoId) {
+            await player.stopVideo?.();
+            return;
+          }
+
+          const startSec = getExpectedPosition(remoteState);
           await player.loadVideoById?.({
             videoId: remoteState.videoId,
-            startSeconds: getExpectedPosition(remoteState),
+            startSeconds: startSec,
           });
+
+          if (remoteState.status === 'playing') {
+            await player.playVideo?.();
+          } else {
+            await player.pauseVideo?.();
+          }
+          return;
         }
 
+        // Same video: handle play/pause & drift sync
         const expectedPos = getExpectedPosition(remoteState);
         const currentPos = (await player.getCurrentTime?.()) || 0;
 
@@ -111,7 +123,7 @@ export function useYouTubeSync({ socket, playerRef, isPlayerReady }) {
       } finally {
         setTimeout(() => {
           isApplyingRemoteChange.current = false;
-        }, 300);
+        }, 500);
       }
     };
 

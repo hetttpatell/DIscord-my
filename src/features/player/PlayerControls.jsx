@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize2, Minimize2, Subtitles } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize2, Minimize2, Subtitles, SkipForward } from 'lucide-react';
 import { Slider } from '../../components/Slider';
 import { Button } from '../../components/Button';
 import { cn } from '../../lib/utils';
@@ -31,6 +31,7 @@ export function PlayerControls({
   onToggleFullscreen,
   isCaptionsEnabled = false,
   onToggleCaptions,
+  onSkip,
   className = '',
   onUserInteraction,
 }) {
@@ -82,6 +83,22 @@ export function PlayerControls({
           >
             {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
           </Button>
+
+          {onSkip && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSkip?.();
+              }}
+              aria-label="Skip to next track"
+              title="Next Track / Skip (Shift+N)"
+              className="text-[#9A978F] hover:text-[#F4F1EA] hover:bg-white/10 active:scale-95 transition-transform"
+            >
+              <SkipForward className="w-4 h-4" />
+            </Button>
+          )}
         </div>
 
         {/* Volume controls, Captions & Fullscreen toggle */}

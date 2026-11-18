@@ -212,6 +212,20 @@ export function setupSocketIO(io) {
           displayName,
         });
         if (result?.room) {
+          if (result.room.mediaState?.type === 'local' && result.startedImmediately) {
+            result.room.mediaState = {
+              type: 'youtube',
+              sharerId: null,
+              sharerName: null,
+              fileName: null,
+              durationSec: 0,
+              positionSec: 0,
+              status: 'paused',
+            };
+            await roomStore.saveRoom(result.room);
+            io.to(roomId).emit('media:state', result.room.mediaState);
+          }
+
           io.to(roomId).emit('queue:update', {
             queue: result.room.queue || [],
             nowPlaying: result.room.nowPlaying || null,
@@ -248,6 +262,19 @@ export function setupSocketIO(io) {
       if (!isAllowed()) return;
       const updatedRoom = await roomStore.skipQueue(roomId);
       if (updatedRoom) {
+        if (updatedRoom.mediaState?.type === 'local') {
+          updatedRoom.mediaState = {
+            type: 'youtube',
+            sharerId: null,
+            sharerName: null,
+            fileName: null,
+            durationSec: 0,
+            positionSec: 0,
+            status: 'paused',
+          };
+          await roomStore.saveRoom(updatedRoom);
+          io.to(roomId).emit('media:state', updatedRoom.mediaState);
+        }
         io.to(roomId).emit('queue:update', {
           queue: updatedRoom.queue || [],
           nowPlaying: updatedRoom.nowPlaying || null,
@@ -265,6 +292,19 @@ export function setupSocketIO(io) {
 
       const updatedRoom = await roomStore.endedQueue(roomId, parsed.data.itemId);
       if (updatedRoom) {
+        if (updatedRoom.mediaState?.type === 'local') {
+          updatedRoom.mediaState = {
+            type: 'youtube',
+            sharerId: null,
+            sharerName: null,
+            fileName: null,
+            durationSec: 0,
+            positionSec: 0,
+            status: 'paused',
+          };
+          await roomStore.saveRoom(updatedRoom);
+          io.to(roomId).emit('media:state', updatedRoom.mediaState);
+        }
         io.to(roomId).emit('queue:update', {
           queue: updatedRoom.queue || [],
           nowPlaying: updatedRoom.nowPlaying || null,

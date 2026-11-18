@@ -21,6 +21,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
   const [isControlsVisible, setIsControlsVisible] = useState(true);
   const [isCaptionsEnabled, setIsCaptionsEnabled] = useState(false);
   const controlsTimerRef = useRef(null);
+  const autoplayTimerRef = useRef(null);
 
   const {
     emitPlay,
@@ -162,11 +163,20 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
     unlockOrientation();
   }, []);
 
+  const handleSkip = useCallback(() => {
+    if (socket) {
+      socket.emit('queue:skip');
+    }
+  }, [socket]);
+
   useEffect(() => {
     return () => {
       unlockOrientation();
       if (controlsTimerRef.current) {
         clearTimeout(controlsTimerRef.current);
+      }
+      if (autoplayTimerRef.current) {
+        clearTimeout(autoplayTimerRef.current);
       }
     };
   }, []);
@@ -185,6 +195,9 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
       if ((e.key === 'c' || e.key === 'C') && !['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) {
         handleToggleCaptions();
       }
+      if (e.shiftKey && (e.key === 'N' || e.key === 'n') && !['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) {
+        handleSkip();
+      }
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -194,7 +207,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isMobileFullscreen, handleExitFullscreen, handleToggleCaptions]);
+  }, [isMobileFullscreen, handleExitFullscreen, handleToggleCaptions, handleSkip]);
 
   useEffect(() => {
     if (isMobileFullscreen) {
@@ -252,12 +265,14 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
       }
     } else if (state === 1) {
       // playing
+      if (autoplayTimerRef.current) clearTimeout(autoplayTimerRef.current);
       setIsAutoplayBlocked(false);
       const dur = await player.getDuration();
       if (dur) setDuration(dur);
     } else if (state === -1 && playerState.status === 'playing') {
-      // Unstarted while server is playing indicates autoplay restriction
-      setTimeout(async () => {
+      // Unstarted while server is playing: wait 2500ms before showing autoplay restriction overlay
+      if (autoplayTimerRef.current) clearTimeout(autoplayTimerRef.current);
+      autoplayTimerRef.current = setTimeout(async () => {
         try {
           const s = await player.getPlayerState();
           if (s === -1 || s === 2) {
@@ -266,7 +281,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
         } catch {
           // ignore
         }
-      }, 500);
+      }, 2500);
     }
   };
 
@@ -558,6 +573,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
           onToggleFullscreen={isMobileFullscreen ? handleExitFullscreen : handleEnterFullscreen}
           isCaptionsEnabled={isCaptionsEnabled}
           onToggleCaptions={handleToggleCaptions}
+          onSkip={handleSkip}
           onUserInteraction={resetControlsTimer}
           className={isMobileFullscreen ? 'bg-black/85 backdrop-blur-xl border-t border-white/10' : ''}
         />

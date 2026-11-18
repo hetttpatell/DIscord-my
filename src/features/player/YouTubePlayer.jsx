@@ -171,6 +171,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
 
   useEffect(() => {
     return () => {
+      useAppStore.getState().setIsFullscreen(false);
       unlockOrientation();
       if (controlsTimerRef.current) {
         clearTimeout(controlsTimerRef.current);
@@ -210,6 +211,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
   }, [isMobileFullscreen, handleExitFullscreen, handleToggleCaptions, handleSkip]);
 
   useEffect(() => {
+    useAppStore.getState().setIsFullscreen(isMobileFullscreen);
     if (isMobileFullscreen) {
       const origOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';

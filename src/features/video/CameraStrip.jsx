@@ -3,6 +3,7 @@ import { useTracks, useIsSpeaking } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import { Mic, MicOff, Maximize2 } from 'lucide-react';
 import { useVoiceContext } from '../voice/VoiceContext';
+import { useAppStore } from '../../stores/useAppStore';
 import { ZoomedCameraModal } from './ZoomedCameraModal';
 
 function CameraTile({ trackRef, onZoom }) {
@@ -212,9 +213,11 @@ function LiveKitCameraStrip() {
   );
 }
 
-export function CameraStrip() {
+export function CameraStrip({ isHidden = false }) {
   const { isLiveKitActive } = useVoiceContext();
-  if (!isLiveKitActive) {
+  const isFullscreen = useAppStore((s) => s.isFullscreen);
+
+  if (!isLiveKitActive || isFullscreen || isHidden) {
     return null;
   }
   return <LiveKitCameraStrip />;

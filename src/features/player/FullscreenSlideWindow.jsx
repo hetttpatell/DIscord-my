@@ -5,7 +5,6 @@ import { VoiceParticipantItem } from '../voice/VoiceParticipantItem';
 import { useVoiceContext } from '../voice/VoiceContext';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 
-const QUICK_EMOJIS = ['❤️', '🔥', '😂', '👏'];
 const ALL_EMOJIS = [
   '❤️', '🔥', '😂', '👏',
   '🎉', '🚀', '😮', '💯',
@@ -242,26 +241,6 @@ export function FullscreenSlideWindow({
                 />
               )}
             </ErrorBoundary>
-          </div>
-
-          {/* Persistent Quick Reaction Bar */}
-          <div className="p-2 border-t border-white/10 bg-[#0B0B10]/60 flex items-center justify-between shrink-0">
-            <span className="text-[10px] font-bold text-[#FF9F1C] uppercase tracking-wider pl-1">
-              React
-            </span>
-            <div className="flex items-center gap-1.5">
-              {QUICK_EMOJIS.map((emoji) => (
-                <button
-                  key={emoji}
-                  type="button"
-                  onClick={() => handleSendReaction(emoji)}
-                  className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/15 active:scale-125 transition-all flex items-center justify-center text-base cursor-pointer"
-                  aria-label={`Send ${emoji} reaction`}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
           </div>
         </div>
       ) : (

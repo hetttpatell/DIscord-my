@@ -401,7 +401,7 @@ export function ScribbleArena({ open, onClose, socket }) {
       role="dialog"
       aria-modal="true"
       aria-label="Scribble & Guess Arena"
-      className="fixed inset-0 z-50 flex flex-col bg-[#0B0B10]/95 backdrop-blur-2xl text-[#F4F1EA] select-none animate-in fade-in duration-200"
+      className="fixed inset-0 h-[100dvh] w-screen z-[60] flex flex-col bg-[#0B0B10] text-[#F4F1EA] select-none animate-in fade-in duration-200 overflow-hidden"
     >
       {/* ============================================================== */}
       {/* 1. TIER 1: TOP STATUS & CONTROLS BAR (CLEAN & SPACIOUS) */}
@@ -729,13 +729,16 @@ export function ScribbleArena({ open, onClose, socket }) {
               </div>
             </div>
           ) : (
-            /* Guesser Bottom Input Bar */
+            /* Guesser Bottom Input Bar (Always Accessible in Mobile & Desktop) */
             <form
               onSubmit={handleSendGuess}
-              className="flex gap-2 p-1.5 sm:p-2 bg-[#1C1C24] rounded-2xl border border-white/10 shadow-xl shrink-0"
+              className="flex gap-2 p-1.5 sm:p-2 bg-[#1C1C24] rounded-2xl border border-white/10 shadow-xl shrink-0 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
             >
               <Input
                 type="text"
+                autoCapitalize="none"
+                autoComplete="off"
+                spellCheck="false"
                 placeholder={
                   hasGuessed
                     ? '🎉 You guessed it! Waiting for others...'

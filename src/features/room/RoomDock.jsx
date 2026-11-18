@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useAppStore } from '../../stores/useAppStore';
 import { Button } from '../../components/Button';
 import { MicButton } from '../voice/MicButton';
 import { CameraButton } from '../voice/CameraButton';
@@ -24,10 +25,13 @@ export function RoomDock({
   queueCount = 0,
   membersCount = 1,
   isGameActive = false,
+  isHidden = false,
   micSlot,
   cameraSlot,
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const isFullscreen = useAppStore((s) => s.isFullscreen);
+  const [isExpandedState, setIsExpanded] = useState(false);
+  const isExpanded = isFullscreen || isHidden ? false : isExpandedState;
   const dragStartYRef = useRef(0);
   const isDraggingRef = useRef(false);
 
@@ -98,7 +102,7 @@ export function RoomDock({
       {/* ============================================================== */}
       {/* 1. APPLE MODAL BACKDROP */}
       {/* ============================================================== */}
-      {isExpanded && (
+      {isExpanded && !isFullscreen && !isHidden && (
         <div
           role="presentation"
           aria-hidden="true"
@@ -110,7 +114,7 @@ export function RoomDock({
       {/* ============================================================== */}
       {/* 2. APPLE IOS MODAL SHEET (GOOGLE MEET ACTION GRID) */}
       {/* ============================================================== */}
-      {isExpanded && (
+      {isExpanded && !isFullscreen && !isHidden && (
         <div
           role="dialog"
           aria-modal="true"
@@ -275,7 +279,11 @@ export function RoomDock({
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        className="fixed bottom-3 sm:bottom-5 left-0 right-0 z-50 flex flex-col items-center justify-center px-3 select-none pointer-events-none"
+        className={`fixed bottom-3 sm:bottom-5 left-0 right-0 z-50 flex flex-col items-center justify-center px-3 select-none pointer-events-none transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          isFullscreen || isHidden
+            ? 'translate-y-36 opacity-0 pointer-events-none'
+            : 'translate-y-0 opacity-100'
+        }`}
       >
         <div className="pointer-events-auto flex flex-col items-center max-w-sm sm:max-w-md w-full">
           {/* Subtle Pull-Up Grabber */}

@@ -1,10 +1,16 @@
 import React, { useState } from 'react';
 import { Heart, X } from 'lucide-react';
+import { useAppStore } from '../../stores/useAppStore';
 
 const TAPBACK_EMOJIS = ['❤️', '👍', '🔥', '😂', '😮', '🎉'];
 
-export function ReactionPicker({ socket, onTriggerLocal, className = '' }) {
+export function ReactionPicker({ socket, onTriggerLocal, isHidden = false, className = '' }) {
+  const isFullscreen = useAppStore((s) => s.isFullscreen);
   const [isOpen, setIsOpen] = useState(false);
+
+  if (isFullscreen || isHidden) {
+    return null;
+  }
 
   const handleSend = (emoji) => {
     if (typeof navigator !== 'undefined' && navigator.vibrate) {

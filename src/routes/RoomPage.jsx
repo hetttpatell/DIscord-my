@@ -17,8 +17,8 @@ import { ScribbleArena } from '../features/games/ScribbleArena';
 import { FloatingReactions } from '../features/reactions/FloatingReactions';
 import { ReactionPicker } from '../features/reactions/ReactionPicker';
 import { CameraStrip } from '../features/video/CameraStrip';
+import { Gamepad2 } from 'lucide-react';
 import { Sheet } from '../components/Sheet';
-import { Button } from '../components/Button';
 import { stopMicrophone } from '../lib/microphone';
 import { stopCamera } from '../lib/camera';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -141,17 +141,6 @@ export default function RoomPage() {
 
     const handleGameStarted = (data) => {
       setActiveGameInfo(data);
-      toast(
-        `🎮 ${data.startedBy} started Scribble & Guess!`,
-        {
-          description: `Round ${data.round}: ${data.drawerName} is drawing (${data.category})`,
-          duration: 10000,
-          action: {
-            label: 'Join Game 🚀',
-            onClick: () => setIsGamesOpen(true),
-          },
-        }
-      );
     };
 
     const handleGameState = (state) => {
@@ -358,30 +347,31 @@ export default function RoomPage() {
           onOpenChange={setIsVoiceFxOpen}
         />
 
-        {/* Floating Active Match Banner when Arena is closed */}
+        {/* Apple Dynamic Island Live Match Capsule when Arena is closed */}
         {activeGameInfo && !isGamesOpen && (
           <aside
             aria-label="Active match announcement"
-            className="fixed top-16 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 px-4 py-2 rounded-2xl bg-[#141419]/95 border border-[#FF9F1C]/40 backdrop-blur-xl shadow-2xl shadow-[#FF9F1C]/20 animate-in slide-in-from-top duration-300"
+            className="fixed top-3 sm:top-4 left-1/2 -translate-x-1/2 z-50 max-w-[calc(100vw-1.5rem)] sm:max-w-md flex items-center justify-between gap-2.5 px-3.5 py-1.5 rounded-full bg-[#1C1C1E]/95 dark:bg-[#141418]/95 backdrop-blur-2xl border border-white/20 shadow-[0_12px_36px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.15)] animate-in slide-in-from-top-3 duration-300 select-none"
           >
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#FF5A5F] opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#FF5A5F]" />
-            </span>
-            <div className="flex items-center gap-1.5 text-xs">
-              <span className="font-extrabold text-white">Scribble Live:</span>
-              <span className="text-[#9A978F]">
-                Round {activeGameInfo.round} • {activeGameInfo.drawerName} is drawing
+            <div className="flex items-center gap-2 min-w-0 truncate">
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#FF375F] opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#FF375F]" />
+              </span>
+              <span className="font-bold text-xs text-white shrink-0">Scribble</span>
+              <span className="text-white/40 shrink-0">•</span>
+              <span className="text-xs text-white/75 truncate font-medium">
+                Round {activeGameInfo.round} ({activeGameInfo.drawerName})
               </span>
             </div>
-            <Button
-              variant="primary"
-              size="sm"
+            <button
+              type="button"
               onClick={() => setIsGamesOpen(true)}
-              className="h-7 px-3 text-xs font-bold rounded-xl ml-1 shadow-md shadow-[#FF9F1C]/20"
+              className="h-7 px-3 rounded-full bg-[#FF9F0A] hover:bg-[#FF9F0A]/90 active:scale-95 text-[#0B0B10] font-bold text-xs shrink-0 whitespace-nowrap shadow-md shadow-[#FF9F0A]/20 transition-all cursor-pointer flex items-center gap-1.5"
             >
-              Join Game 🎮
-            </Button>
+              <span>Join</span>
+              <Gamepad2 className="w-3.5 h-3.5" />
+            </button>
           </aside>
         )}
 
@@ -401,6 +391,7 @@ export default function RoomPage() {
         {/* Reaction Floating Bar on the Screen */}
         <ReactionPicker
           socket={socket}
+          isHidden={isGamesOpen || isMembersOpen}
           onTriggerLocal={(data) => {
             localReactionRef.current?.({
               ...data,
@@ -411,7 +402,7 @@ export default function RoomPage() {
 
         {/* Floating / Docked Live Camera Strip */}
         <ErrorBoundary>
-          <CameraStrip />
+          <CameraStrip isHidden={isGamesOpen} />
         </ErrorBoundary>
 
         {/* Bottom Dock */}
@@ -424,6 +415,7 @@ export default function RoomPage() {
           queueCount={totalQueueCount}
           membersCount={Array.isArray(members) ? members.length : 1}
           isGameActive={Boolean(activeGameInfo)}
+          isHidden={isGamesOpen}
         />
       </div>
     </LiveKitVoiceProvider>

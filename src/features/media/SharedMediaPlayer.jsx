@@ -543,7 +543,12 @@ export function SharedMediaPlayer({
   }, [isMobileFullscreen, handleExitFullscreen, handleToggleCaptions]);
 
   useEffect(() => {
+    useAppStore.getState().setIsFullscreen(isMobileFullscreen);
+  }, [isMobileFullscreen]);
+
+  useEffect(() => {
     return () => {
+      useAppStore.getState().setIsFullscreen(false);
       if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
       try {
         if (screen.orientation?.unlock) screen.orientation.unlock();

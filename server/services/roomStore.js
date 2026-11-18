@@ -74,6 +74,7 @@ export class RoomStore {
           scores: {},
           guessedMemberIds: [],
           drawHistory: [],
+          usedWords: [],
         };
       }
     }
@@ -139,6 +140,7 @@ export class RoomStore {
         scores: {},
         guessedMemberIds: [],
         drawHistory: [],
+        usedWords: [],
       },
     };
 

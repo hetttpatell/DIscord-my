@@ -34,6 +34,8 @@ const COLOR_PALETTE = [
   '#9B5DE5',
   '#F15BB5',
   '#8AC926',
+  '#A0522D',
+  '#708090',
 ];
 
 const BRUSH_SIZES = [
@@ -78,9 +80,10 @@ export function ScribbleArena({ open, onClose, socket }) {
   const [guessInput, setGuessInput] = useState('');
   const [chatLog, setChatLog] = useState([]);
 
-  // Floating live guess feed with 3-second auto-slide
+  // Floating live guess HUD with 3-second auto-slide
   const [isFloatingFeedOpen, setIsFloatingFeedOpen] = useState(true);
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(false);
+  const [isFullChatOpen, setIsFullChatOpen] = useState(false);
   const autoHideTimeoutRef = useRef(null);
 
   const isDrawer = gameState.currentDrawerId === memberId;
@@ -97,7 +100,7 @@ export function ScribbleArena({ open, onClose, socket }) {
     }
     autoHideTimeoutRef.current = setTimeout(() => {
       setIsFloatingFeedOpen(false);
-    }, 3200); // 3.2 seconds
+    }, 3200);
   }, []);
 
   // Clean up auto-hide timer on unmount
@@ -409,7 +412,7 @@ export function ScribbleArena({ open, onClose, socket }) {
     >
       {/* Top Header Bar */}
       <header className="h-14 sm:h-16 px-3 sm:px-6 flex items-center justify-between border-b border-white/10 bg-[#141419]/95 shrink-0 z-20">
-        {/* Left: Game Title & Round Chip */}
+        {/* Left: Branding & Round Info */}
         <div className="flex items-center gap-2 sm:gap-3">
           <div className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-[#FF5A5F] to-[#FF9F1C] text-white shadow-lg shadow-[#FF5A5F]/20 shrink-0">
             <Gamepad2 className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
@@ -417,7 +420,7 @@ export function ScribbleArena({ open, onClose, socket }) {
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5 sm:gap-2">
               <span className="font-extrabold text-xs sm:text-base tracking-tight text-white whitespace-nowrap">
-                Scribble & Guess
+                Scribble Arena
               </span>
               <span className="px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold font-mono bg-[#FF9F1C]/20 text-[#FF9F1C] border border-[#FF9F1C]/30 whitespace-nowrap">
                 R{gameState.round || 1}/{gameState.maxRounds || 5}
@@ -520,7 +523,7 @@ export function ScribbleArena({ open, onClose, socket }) {
         </div>
       </header>
 
-      {/* Main Unified Screen: Hero Drawing Pad + Floating HUD */}
+      {/* Main Unified Screen: Primary Drawing Pad + Floating Guess Stream */}
       <div className="relative flex-1 min-h-0 flex flex-col lg:flex-row p-2 sm:p-4 gap-3 overflow-hidden">
         {/* Hero Drawing Pad Stage (Always Primary) */}
         <section
@@ -541,26 +544,17 @@ export function ScribbleArena({ open, onClose, socket }) {
               style={{ touchAction: 'none' }}
             />
 
-            {/* FLOATING LIVE GUESS HUD (With 3-Second Auto-Slide Inactivity Animation) */}
+            {/* FLOATING LIVE GUESS HUD (Touches pass through to canvas seamlessly) */}
             <div
-              className={`absolute top-3 left-3 z-30 transition-all duration-300 ease-out flex flex-col items-start ${
+              className={`absolute top-3 left-3 z-30 transition-all duration-300 ease-out flex flex-col items-start pointer-events-none ${
                 isFloatingFeedOpen
                   ? 'translate-x-0 opacity-100'
                   : '-translate-x-[calc(100%-2.25rem)] opacity-85'
               }`}
-              onMouseEnter={() => {
-                if (autoHideTimeoutRef.current) clearTimeout(autoHideTimeoutRef.current);
-                setIsFloatingFeedOpen(true);
-              }}
-              onMouseLeave={resetAutoHideTimer}
-              onTouchStart={() => {
-                if (autoHideTimeoutRef.current) clearTimeout(autoHideTimeoutRef.current);
-                setIsFloatingFeedOpen(true);
-              }}
             >
               {isFloatingFeedOpen ? (
                 /* Expanded Floating Live Guesses Window */
-                <div className="w-56 sm:w-64 max-h-48 sm:max-h-56 rounded-2xl bg-[#141419]/90 border border-white/15 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden text-xs">
+                <div className="pointer-events-auto w-56 sm:w-64 max-h-44 sm:max-h-56 rounded-2xl bg-[#141419]/90 border border-white/15 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden text-xs">
                   {/* Floating Header */}
                   <div className="px-2.5 py-1.5 flex items-center justify-between border-b border-white/10 bg-white/5">
                     <div className="flex items-center gap-1.5 text-[11px] font-bold text-white">
@@ -584,7 +578,7 @@ export function ScribbleArena({ open, onClose, socket }) {
                         Guesses will stream here live...
                       </span>
                     ) : (
-                      chatLog.slice(-15).map((msg) => (
+                      chatLog.slice(-12).map((msg) => (
                         <div
                           key={msg.id}
                           className={`leading-tight p-1.5 rounded-lg text-[11px] ${
@@ -612,7 +606,7 @@ export function ScribbleArena({ open, onClose, socket }) {
                 <button
                   type="button"
                   onClick={() => resetAutoHideTimer()}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-[#1C1C24]/90 border border-[#FF9F1C]/40 text-white backdrop-blur-md shadow-xl hover:bg-[#252530] cursor-pointer transition-all animate-in slide-in-from-left duration-200"
+                  className="pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-[#1C1C24]/90 border border-[#FF9F1C]/40 text-white backdrop-blur-md shadow-xl hover:bg-[#252530] cursor-pointer transition-all animate-in slide-in-from-left duration-200"
                 >
                   <MessageSquare className="w-3.5 h-3.5 text-[#FF9F1C]" />
                   <span className="text-[10px] font-bold tracking-tight">
@@ -631,10 +625,10 @@ export function ScribbleArena({ open, onClose, socket }) {
                 </div>
                 <div className="flex flex-col gap-1 max-w-sm">
                   <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                    Scribble & Guess Arena
+                    Scribble Arena
                   </h2>
                   <p className="text-xs text-[#9A978F] leading-relaxed">
-                    One member draws, everyone guesses on the same screen! Score points and climb the room leaderboard.
+                    One member draws, everyone guesses on the same screen! 100+ words across food, animals, heroes, and places.
                   </p>
                 </div>
                 <Button
@@ -671,7 +665,7 @@ export function ScribbleArena({ open, onClose, socket }) {
           {isDrawer && isRoundActive ? (
             /* Drawer Professional Studio Toolbar */
             <div className="flex flex-wrap items-center justify-between gap-2 p-2 sm:p-3 bg-[#1C1C24] rounded-2xl border border-white/10 shadow-xl shrink-0">
-              {/* Color Palette (10 Vibrant Swatches) */}
+              {/* Color Palette (12 Designer Swatches) */}
               <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto py-1 max-w-full">
                 {COLOR_PALETTE.map((color) => (
                   <button
@@ -777,23 +771,33 @@ export function ScribbleArena({ open, onClose, socket }) {
                 variant="primary"
                 size="default"
                 disabled={!isRoundActive || hasGuessed || !guessInput.trim()}
-                className="h-11 px-5 shrink-0 rounded-xl font-bold flex items-center gap-1.5 shadow-lg shadow-[#FF9F1C]/20"
+                className="h-11 px-4 sm:px-5 shrink-0 rounded-xl font-bold flex items-center gap-1.5 shadow-lg shadow-[#FF9F1C]/20"
               >
                 <span>Guess</span>
                 <Send className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="default"
+                onClick={() => setIsFullChatOpen((prev) => !prev)}
+                className="h-11 px-3 shrink-0 rounded-xl text-[#9A978F] hover:text-white border border-white/10"
+                title="Toggle Full Chat Log"
+              >
+                <MessageSquare className="w-4 h-4" />
               </Button>
             </form>
           )}
         </section>
 
-        {/* Desktop Sidebar OR Mobile Slide-over Leaderboard */}
-        {(isLeaderboardOpen || window.innerWidth >= 1024) && (
+        {/* Desktop Sidebar OR Slide-over Leaderboard / Full Chat */}
+        {(isLeaderboardOpen || isFullChatOpen || window.innerWidth >= 1024) && (
           <aside
-            aria-label="Room Leaderboard"
+            aria-label="Room Leaderboard and Guesses"
             className={`${
               window.innerWidth >= 1024
                 ? 'w-72 shrink-0 flex flex-col gap-3 min-h-0'
-                : 'fixed inset-y-16 right-0 z-40 w-72 bg-[#141419]/95 border-l border-white/15 backdrop-blur-2xl p-4 shadow-2xl flex flex-col gap-3 animate-in slide-in-from-right duration-200'
+                : 'fixed inset-y-14 sm:inset-y-16 right-0 z-40 w-80 max-w-[85vw] bg-[#141419]/95 border-l border-white/15 backdrop-blur-2xl p-4 shadow-2xl flex flex-col gap-3 animate-in slide-in-from-right duration-200'
             }`}
           >
             <div className="flex items-center justify-between pb-2 border-b border-white/10">
@@ -803,7 +807,10 @@ export function ScribbleArena({ open, onClose, socket }) {
               </div>
               <button
                 type="button"
-                onClick={() => setIsLeaderboardOpen(false)}
+                onClick={() => {
+                  setIsLeaderboardOpen(false);
+                  setIsFullChatOpen(false);
+                }}
                 className="p-1 rounded-md text-[#9A978F] hover:text-white cursor-pointer lg:hidden"
               >
                 <X className="w-4 h-4" />
@@ -811,7 +818,7 @@ export function ScribbleArena({ open, onClose, socket }) {
             </div>
 
             {/* Players List */}
-            <div className="flex-1 overflow-y-auto flex flex-col gap-1.5 pr-1 text-xs">
+            <div className="h-44 sm:h-52 overflow-y-auto flex flex-col gap-1.5 pr-1 text-xs shrink-0">
               {scoreboard.length === 0 ? (
                 <span className="text-xs text-[#9A978F] m-auto italic">
                   Scores will appear here
@@ -862,8 +869,42 @@ export function ScribbleArena({ open, onClose, socket }) {
               )}
             </div>
 
+            {/* Full Chat Log (Scrollable) */}
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden pt-2 border-t border-white/10">
+              <span className="text-[11px] font-bold text-white mb-1.5 flex items-center gap-1">
+                <Flame className="w-3.5 h-3.5 text-[#FF5A5F]" /> Full Guesses Stream
+              </span>
+              <div className="flex-1 overflow-y-auto flex flex-col gap-1.5 pr-1 text-xs">
+                {chatLog.length === 0 ? (
+                  <span className="text-[10px] text-[#9A978F] m-auto italic">
+                    No guesses yet
+                  </span>
+                ) : (
+                  chatLog.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`leading-snug p-1.5 rounded-lg text-xs ${
+                        msg.isCorrect
+                          ? 'bg-[#2EC4B6]/15 border border-[#2EC4B6]/30 text-[#2EC4B6] font-bold shadow-sm'
+                          : msg.isSystem
+                          ? 'bg-white/5 text-[#FF9F1C] italic'
+                          : 'bg-[#1C1C24] text-[#F4F1EA]'
+                      }`}
+                    >
+                      {!msg.isSystem && !msg.isCorrect && (
+                        <span className="font-bold text-[#9A978F] mr-1.5">
+                          {msg.displayName}:
+                        </span>
+                      )}
+                      <span>{msg.text}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
             {/* Match Reset Action */}
-            <div className="flex items-center justify-between text-[11px] text-[#9A978F] pt-2 border-t border-white/10">
+            <div className="flex items-center justify-between text-[11px] text-[#9A978F] pt-2 border-t border-white/10 shrink-0">
               <span>{displayName || 'Guest'}</span>
               <button
                 type="button"

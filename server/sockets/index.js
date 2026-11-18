@@ -72,43 +72,142 @@ const gameGuessSchema = z.object({
 });
 
 const WORD_BANK = [
-  { word: 'PIZZA', category: 'Food & Drinks' },
-  { word: 'GUITAR', category: 'Music & Instruments' },
-  { word: 'ROBOT', category: 'Sci-Fi & Tech' },
-  { word: 'SUNFLOWER', category: 'Nature & Plants' },
-  { word: 'ASTRONAUT', category: 'Space & Occupations' },
-  { word: 'CAT', category: 'Animals' },
-  { word: 'POPCORN', category: 'Food & Drinks' },
-  { word: 'AIRPLANE', category: 'Vehicles' },
-  { word: 'CASTLE', category: 'Places & Buildings' },
-  { word: 'RAINBOW', category: 'Nature & Weather' },
-  { word: 'GHOST', category: 'Fantasy & Spooky' },
-  { word: 'VOLCANO', category: 'Nature & Geography' },
-  { word: 'BURGER', category: 'Food & Drinks' },
-  { word: 'DINOSAUR', category: 'Creatures' },
-  { word: 'SUPERHERO', category: 'Characters' },
-  { word: 'CAMPFIRE', category: 'Outdoors' },
-  { word: 'HEADPHONES', category: 'Gadgets' },
-  { word: 'PENGUIN', category: 'Animals' },
-  { word: 'PIRATE', category: 'Characters' },
-  { word: 'BALLOON', category: 'Party' },
-  { word: 'DIAMOND', category: 'Treasures' },
-  { word: 'CANDLE', category: 'Household' },
-  { word: 'CUPCAKE', category: 'Food & Sweets' },
-  { word: 'SNOWMAN', category: 'Winter' },
-  { word: 'TELESCOPE', category: 'Science' },
-  { word: 'TREASURE', category: 'Adventure' },
-  { word: 'WHALE', category: 'Sea Life' },
-  { word: 'ROCKET', category: 'Space' },
-  { word: 'DRAGON', category: 'Mythical' },
-  { word: 'BICYCLE', category: 'Vehicles' },
+  // Food & Sweets
+  { word: 'PIZZA', category: 'Food & Sweets' },
+  { word: 'BURGER', category: 'Food & Sweets' },
   { word: 'DONUT', category: 'Food & Sweets' },
-  { word: 'PANDA', category: 'Animals' },
-  { word: 'SUNGLASSES', category: 'Fashion' },
-  { word: 'LIGHTBULB', category: 'Inventions' },
+  { word: 'POPCORN', category: 'Food & Sweets' },
+  { word: 'CUPCAKE', category: 'Food & Sweets' },
   { word: 'ICE CREAM', category: 'Food & Sweets' },
-  { word: 'SPIDER', category: 'Creatures' },
-  { word: 'TREEHOUSE', category: 'Places' },
+  { word: 'PANCAKE', category: 'Food & Sweets' },
+  { word: 'TACO', category: 'Food & Sweets' },
+  { word: 'SUSHI', category: 'Food & Sweets' },
+  { word: 'WATERMELON', category: 'Food & Sweets' },
+  { word: 'COOKIE', category: 'Food & Sweets' },
+  { word: 'CHOCOLATE', category: 'Food & Sweets' },
+  { word: 'BANANA', category: 'Food & Sweets' },
+  { word: 'HOT DOG', category: 'Food & Sweets' },
+  { word: 'STRAWBERRY', category: 'Food & Sweets' },
+  { word: 'PINEAPPLE', category: 'Food & Sweets' },
+  { word: 'AVOCADO', category: 'Food & Sweets' },
+  { word: 'WAFFLE', category: 'Food & Sweets' },
+  { word: 'CHEESE', category: 'Food & Sweets' },
+  { word: 'FRENCH FRIES', category: 'Food & Sweets' },
+  { word: 'LOLLIPOP', category: 'Food & Sweets' },
+
+  // Animals & Wildlife
+  { word: 'CAT', category: 'Animals & Wildlife' },
+  { word: 'PENGUIN', category: 'Animals & Wildlife' },
+  { word: 'PANDA', category: 'Animals & Wildlife' },
+  { word: 'WHALE', category: 'Animals & Wildlife' },
+  { word: 'SPIDER', category: 'Animals & Wildlife' },
+  { word: 'DOLPHIN', category: 'Animals & Wildlife' },
+  { word: 'LION', category: 'Animals & Wildlife' },
+  { word: 'GIRAFFE', category: 'Animals & Wildlife' },
+  { word: 'ELEPHANT', category: 'Animals & Wildlife' },
+  { word: 'MONKEY', category: 'Animals & Wildlife' },
+  { word: 'OCTOPUS', category: 'Animals & Wildlife' },
+  { word: 'BUTTERFLY', category: 'Animals & Wildlife' },
+  { word: 'KANGAROO', category: 'Animals & Wildlife' },
+  { word: 'FLAMINGO', category: 'Animals & Wildlife' },
+  { word: 'TURTLE', category: 'Animals & Wildlife' },
+  { word: 'CHAMELEON', category: 'Animals & Wildlife' },
+  { word: 'HAMSTER', category: 'Animals & Wildlife' },
+  { word: 'EAGLE', category: 'Animals & Wildlife' },
+  { word: 'SHARK', category: 'Animals & Wildlife' },
+  { word: 'KOALA', category: 'Animals & Wildlife' },
+  { word: 'FROG', category: 'Animals & Wildlife' },
+  { word: 'PARROT', category: 'Animals & Wildlife' },
+  { word: 'ZEBRA', category: 'Animals & Wildlife' },
+  { word: 'HEDGEHOG', category: 'Animals & Wildlife' },
+
+  // Objects & Tech
+  { word: 'GUITAR', category: 'Objects & Tech' },
+  { word: 'ROBOT', category: 'Objects & Tech' },
+  { word: 'HEADPHONES', category: 'Objects & Tech' },
+  { word: 'DIAMOND', category: 'Objects & Tech' },
+  { word: 'CANDLE', category: 'Objects & Tech' },
+  { word: 'SUNGLASSES', category: 'Objects & Tech' },
+  { word: 'LIGHTBULB', category: 'Objects & Tech' },
+  { word: 'CAMERA', category: 'Objects & Tech' },
+  { word: 'BACKPACK', category: 'Objects & Tech' },
+  { word: 'UMBRELLA', category: 'Objects & Tech' },
+  { word: 'ALARM CLOCK', category: 'Objects & Tech' },
+  { word: 'MICROSCOPE', category: 'Objects & Tech' },
+  { word: 'TEAPOT', category: 'Objects & Tech' },
+  { word: 'LANTERN', category: 'Objects & Tech' },
+  { word: 'COMPASS', category: 'Objects & Tech' },
+  { word: 'HOURGLASS', category: 'Objects & Tech' },
+  { word: 'SCISSORS', category: 'Objects & Tech' },
+  { word: 'KEYBOARD', category: 'Objects & Tech' },
+  { word: 'FLASHLIGHT', category: 'Objects & Tech' },
+  { word: 'DRUM SET', category: 'Objects & Tech' },
+
+  // Nature & Weather
+  { word: 'SUNFLOWER', category: 'Nature & Weather' },
+  { word: 'RAINBOW', category: 'Nature & Weather' },
+  { word: 'VOLCANO', category: 'Nature & Weather' },
+  { word: 'CAMPFIRE', category: 'Nature & Weather' },
+  { word: 'TREEHOUSE', category: 'Nature & Weather' },
+  { word: 'SNOWMAN', category: 'Nature & Weather' },
+  { word: 'WATERFALL', category: 'Nature & Weather' },
+  { word: 'ISLAND', category: 'Nature & Weather' },
+  { word: 'CACTUS', category: 'Nature & Weather' },
+  { word: 'LIGHTNING', category: 'Nature & Weather' },
+  { word: 'SNOWFLAKE', category: 'Nature & Weather' },
+  { word: 'TORNADO', category: 'Nature & Weather' },
+  { word: 'PALM TREE', category: 'Nature & Weather' },
+  { word: 'MUSHROOM', category: 'Nature & Weather' },
+  { word: 'CORAL REEF', category: 'Nature & Weather' },
+
+  // Fantasy & Characters
+  { word: 'GHOST', category: 'Fantasy & Heroes' },
+  { word: 'DINOSAUR', category: 'Fantasy & Heroes' },
+  { word: 'SUPERHERO', category: 'Fantasy & Heroes' },
+  { word: 'PIRATE', category: 'Fantasy & Heroes' },
+  { word: 'DRAGON', category: 'Fantasy & Heroes' },
+  { word: 'WIZARD', category: 'Fantasy & Heroes' },
+  { word: 'UNICORN', category: 'Fantasy & Heroes' },
+  { word: 'MERMAID', category: 'Fantasy & Heroes' },
+  { word: 'NINJA', category: 'Fantasy & Heroes' },
+  { word: 'VAMPIRE', category: 'Fantasy & Heroes' },
+  { word: 'ALIEN', category: 'Fantasy & Heroes' },
+  { word: 'MUMMY', category: 'Fantasy & Heroes' },
+  { word: 'GENIE', category: 'Fantasy & Heroes' },
+  { word: 'KNIGHT', category: 'Fantasy & Heroes' },
+
+  // Space & Science
+  { word: 'ASTRONAUT', category: 'Space & Science' },
+  { word: 'ROCKET', category: 'Space & Science' },
+  { word: 'TELESCOPE', category: 'Space & Science' },
+  { word: 'METEOR', category: 'Space & Science' },
+  { word: 'SATELLITE', category: 'Space & Science' },
+  { word: 'SPACESHIP', category: 'Space & Science' },
+  { word: 'BLACK HOLE', category: 'Space & Science' },
+
+  // Vehicles & Places
+  { word: 'AIRPLANE', category: 'Vehicles & Places' },
+  { word: 'CASTLE', category: 'Vehicles & Places' },
+  { word: 'BICYCLE', category: 'Vehicles & Places' },
+  { word: 'HOT AIR BALLOON', category: 'Vehicles & Places' },
+  { word: 'HELICOPTER', category: 'Vehicles & Places' },
+  { word: 'SKATEBOARD', category: 'Vehicles & Places' },
+  { word: 'SAILBOAT', category: 'Vehicles & Places' },
+  { word: 'TRAIN', category: 'Vehicles & Places' },
+  { word: 'SUBMARINE', category: 'Vehicles & Places' },
+  { word: 'PYRAMID', category: 'Vehicles & Places' },
+  { word: 'LIGHTHOUSE', category: 'Vehicles & Places' },
+  { word: 'WINDMILL', category: 'Vehicles & Places' },
+  { word: 'ROLLER COASTER', category: 'Vehicles & Places' },
+
+  // Party & Treasures
+  { word: 'BALLOON', category: 'Party & Celebration' },
+  { word: 'TREASURE', category: 'Party & Celebration' },
+  { word: 'CROWN', category: 'Party & Celebration' },
+  { word: 'MAGIC WAND', category: 'Party & Celebration' },
+  { word: 'TROPHY', category: 'Party & Celebration' },
+  { word: 'FIREWORKS', category: 'Party & Celebration' },
+  { word: 'GIFT BOX', category: 'Party & Celebration' },
 ];
 
 const gameTimers = new Map();
@@ -186,7 +285,11 @@ async function startNewRound(io, roomId, explicitDrawerId = null, starterName = 
     nextDrawer = membersList[nextIdx];
   }
 
-  const picked = WORD_BANK[Math.floor(Math.random() * WORD_BANK.length)];
+  // Filter out recently used words in this match so words never repeat
+  const usedWords = Array.isArray(room.gameState?.usedWords) ? room.gameState.usedWords : [];
+  const availableWords = WORD_BANK.filter((item) => !usedWords.includes(item.word));
+  const pool = availableWords.length > 0 ? availableWords : WORD_BANK;
+  const picked = pool[Math.floor(Math.random() * pool.length)];
   const nextRound = (room.gameState?.round || 0) + 1;
   const currentScores = room.gameState?.scores || {};
 
@@ -208,6 +311,7 @@ async function startNewRound(io, roomId, explicitDrawerId = null, starterName = 
     scores: currentScores,
     guessedMemberIds: [],
     drawHistory: [],
+    usedWords: [...usedWords, picked.word],
   };
 
   await roomStore.saveRoom(room);
@@ -887,6 +991,7 @@ export function setupSocketIO(io) {
           scores: {},
           guessedMemberIds: [],
           drawHistory: [],
+          usedWords: [],
         };
         await roomStore.saveRoom(room);
         await broadcastGameState(io, roomId);

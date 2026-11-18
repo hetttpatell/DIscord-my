@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useRoomContext, useTracks, VideoTrack } from '@livekit/components-react';
-import { Track, LocalVideoTrack, LocalAudioTrack } from 'livekit-client';
+import { Track } from 'livekit-client';
 import { Film, Radio, StopCircle, Maximize2, Minimize2, Users, Smile, Play } from 'lucide-react';
 import { PlayerControls } from '../player/PlayerControls';
 import { FullscreenSlideWindow } from '../player/FullscreenSlideWindow';
@@ -50,11 +50,49 @@ export function SharedMediaPlayer({
   const [isControlsVisible, setIsControlsVisible] = useState(true);
   const controlsTimerRef = useRef(null);
 
-  // LiveKit ScreenShare tracks for viewers
-  const screenShareTracks = useTracks([Track.Source.ScreenShare]);
-  const remoteTrackRef = screenShareTracks.find(
-    (t) => !t.participant?.isLocal && (t.participant?.identity === mediaState?.sharerId || t.source === Track.Source.ScreenShare)
+  // LiveKit ScreenShare & Camera tracks for viewers (with onlySubscribed: false so new publications are never hidden)
+  const tracks = useTracks(
+    [Track.Source.ScreenShare, Track.Source.Camera],
+    { onlySubscribed: false }
   );
+
+  const remoteTrackRef = useMemo(() => {
+    if (isSharer) return null;
+
+    // 1. Screen share video track from the room's sharer
+    const fromSharer = tracks.find(
+      (t) =>
+        !t.participant?.isLocal &&
+        (t.publication?.kind === 'video' || t.source === Track.Source.ScreenShare) &&
+        (t.participant?.identity === mediaState?.sharerId || t.participant?.name === mediaState?.sharerName)
+    );
+    if (fromSharer) return fromSharer;
+
+    // 2. Any screen share video from any remote participant
+    const anyScreenShare = tracks.find(
+      (t) =>
+        !t.participant?.isLocal &&
+        (t.publication?.kind === 'video' || t.source === Track.Source.ScreenShare)
+    );
+    if (anyScreenShare) return anyScreenShare;
+
+    // 3. Fallback: Any remote video track in the room
+    const anyVideo = tracks.find(
+      (t) =>
+        !t.participant?.isLocal &&
+        (t.publication?.kind === 'video' || t.publication?.track?.kind === 'video')
+    );
+    return anyVideo || null;
+  }, [isSharer, tracks, mediaState?.sharerId, mediaState?.sharerName]);
+
+  // Ensure subscription is active as soon as remote track publication is detected
+  useEffect(() => {
+    if (isSharer || !remoteTrackRef?.publication) return;
+
+    if (!remoteTrackRef.publication.isSubscribed) {
+      remoteTrackRef.publication.setSubscribed(true);
+    }
+  }, [isSharer, remoteTrackRef]);
 
   // 2. Sharer: Publish video & audio tracks to LiveKit room
   useEffect(() => {
@@ -87,9 +125,9 @@ export function SharedMediaPlayer({
 
       try {
         const stream = video.captureStream
-          ? video.captureStream()
+          ? video.captureStream(30)
           : video.mozCaptureStream
-          ? video.mozCaptureStream()
+          ? video.mozCaptureStream(30)
           : null;
 
         if (!stream) {
@@ -101,19 +139,20 @@ export function SharedMediaPlayer({
         const audioMediaTrack = stream.getAudioTracks()[0];
 
         if (videoMediaTrack && !isCancelled && !publishedVideoTrackRef.current) {
-          const lkVideo = new LocalVideoTrack(videoMediaTrack, { name: 'shared-video' });
-          publishedVideoTrackRef.current = lkVideo;
-          await room.localParticipant.publishTrack(lkVideo, {
+          const pub = await room.localParticipant.publishTrack(videoMediaTrack, {
+            name: 'shared-video',
             source: Track.Source.ScreenShare,
+            simulcast: false,
           });
+          publishedVideoTrackRef.current = pub.track || pub;
         }
 
         if (audioMediaTrack && !isCancelled && !publishedAudioTrackRef.current) {
-          const lkAudio = new LocalAudioTrack(audioMediaTrack, { name: 'shared-audio' });
-          publishedAudioTrackRef.current = lkAudio;
-          await room.localParticipant.publishTrack(lkAudio, {
+          const pubAudio = await room.localParticipant.publishTrack(audioMediaTrack, {
+            name: 'shared-audio',
             source: Track.Source.ScreenShareAudio,
           });
+          publishedAudioTrackRef.current = pubAudio.track || pubAudio;
         }
       } catch (err) {
         console.warn('[SharedMedia] Error publishing media tracks:', err);
@@ -167,15 +206,21 @@ export function SharedMediaPlayer({
       }
       if (publishedVideoTrackRef.current && room?.localParticipant) {
         try {
-          room.localParticipant.unpublishTrack(publishedVideoTrackRef.current);
-          publishedVideoTrackRef.current.stop();
+          const trackToUnpublish = publishedVideoTrackRef.current.track || publishedVideoTrackRef.current;
+          room.localParticipant.unpublishTrack(trackToUnpublish);
+          if (typeof trackToUnpublish.stop === 'function') {
+            trackToUnpublish.stop();
+          }
         } catch {}
         publishedVideoTrackRef.current = null;
       }
       if (publishedAudioTrackRef.current && room?.localParticipant) {
         try {
-          room.localParticipant.unpublishTrack(publishedAudioTrackRef.current);
-          publishedAudioTrackRef.current.stop();
+          const trackToUnpublish = publishedAudioTrackRef.current.track || publishedAudioTrackRef.current;
+          room.localParticipant.unpublishTrack(trackToUnpublish);
+          if (typeof trackToUnpublish.stop === 'function') {
+            trackToUnpublish.stop();
+          }
         } catch {}
         publishedAudioTrackRef.current = null;
       }
@@ -504,6 +549,7 @@ export function SharedMediaPlayer({
           >
             <VideoTrack
               trackRef={remoteTrackRef}
+              manageSubscription={true}
               className="w-full h-full object-contain pointer-events-none"
             />
           </div>

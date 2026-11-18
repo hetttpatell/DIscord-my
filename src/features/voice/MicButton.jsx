@@ -12,6 +12,11 @@ import {
   getActiveMicrophoneStream,
   setMicrophoneMuted,
 } from '../../lib/microphone';
+import {
+  createProcessedAudioStream,
+  cleanupVoiceEffects,
+  getCurrentVoicePreset,
+} from '../../lib/voiceEffects';
 
 function LiveKitMicButton({ className }) {
   const room = useRoomContext();
@@ -80,6 +85,7 @@ function LiveKitMicButton({ className }) {
         localAudioTrackRef.current = null;
       }
       stopMicrophone();
+      cleanupVoiceEffects();
     };
   }, [room]);
 
@@ -169,8 +175,10 @@ function LiveKitMicButton({ className }) {
 
     // 3. User tapped to unmute: invoke getUserMedia as the VERY FIRST awaited operation
     try {
-      const stream = await requestMicrophoneStream();
-      const audioTrack = stream.getAudioTracks()[0];
+      const rawStream = await requestMicrophoneStream();
+      const currentPreset = getCurrentVoicePreset();
+      const processedStream = createProcessedAudioStream(rawStream, currentPreset);
+      const audioTrack = processedStream.getAudioTracks()[0] || rawStream.getAudioTracks()[0];
 
       if (room?.localParticipant && audioTrack) {
         const localTrack = new LocalAudioTrack(audioTrack);
@@ -280,6 +288,7 @@ function FallbackMicButton({ className }) {
   useEffect(() => {
     return () => {
       stopMicrophone();
+      cleanupVoiceEffects();
     };
   }, []);
 
@@ -358,7 +367,8 @@ function FallbackMicButton({ className }) {
 
     // 3. Invoke getUserMedia as the VERY FIRST awaited operation
     try {
-      await requestMicrophoneStream();
+      const rawStream = await requestMicrophoneStream();
+      createProcessedAudioStream(rawStream, getCurrentVoicePreset());
       setIsMicActive(true);
       setIsSheetOpen(false);
       setErrorInfo(null);

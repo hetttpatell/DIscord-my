@@ -61,6 +61,21 @@ export class RoomStore {
           status: 'paused',
         };
       }
+      if (!room.gameState) {
+        room.gameState = {
+          status: 'idle',
+          currentDrawerId: null,
+          currentDrawerName: null,
+          word: '',
+          category: '',
+          round: 0,
+          maxRounds: 5,
+          timeRemaining: 60,
+          scores: {},
+          guessedMemberIds: [],
+          drawHistory: [],
+        };
+      }
     }
     return room;
   }
@@ -112,6 +127,19 @@ export class RoomStore {
       queue: [],
       nowPlaying: null,
       queueVersion: 1,
+      gameState: {
+        status: 'idle',
+        currentDrawerId: null,
+        currentDrawerName: null,
+        word: '',
+        category: '',
+        round: 0,
+        maxRounds: 5,
+        timeRemaining: 60,
+        scores: {},
+        guessedMemberIds: [],
+        drawHistory: [],
+      },
     };
 
     if (creatorMemberId && creatorDisplayName) {

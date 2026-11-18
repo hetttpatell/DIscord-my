@@ -58,6 +58,236 @@ const mediaControlSchema = z.object({
   positionSec: z.number().min(0).optional(),
 });
 
+const gameDrawSchema = z.object({
+  x0: z.number().min(0).max(1),
+  y0: z.number().min(0).max(1),
+  x1: z.number().min(0).max(1),
+  y1: z.number().min(0).max(1),
+  color: z.string().min(1).max(32),
+  size: z.number().min(1).max(50),
+});
+
+const gameGuessSchema = z.object({
+  text: z.string().trim().min(1).max(100),
+});
+
+const WORD_BANK = [
+  { word: 'PIZZA', category: 'Food & Drinks' },
+  { word: 'GUITAR', category: 'Music & Instruments' },
+  { word: 'ROBOT', category: 'Sci-Fi & Tech' },
+  { word: 'SUNFLOWER', category: 'Nature & Plants' },
+  { word: 'ASTRONAUT', category: 'Space & Occupations' },
+  { word: 'CAT', category: 'Animals' },
+  { word: 'POPCORN', category: 'Food & Drinks' },
+  { word: 'AIRPLANE', category: 'Vehicles' },
+  { word: 'CASTLE', category: 'Places & Buildings' },
+  { word: 'RAINBOW', category: 'Nature & Weather' },
+  { word: 'GHOST', category: 'Fantasy & Spooky' },
+  { word: 'VOLCANO', category: 'Nature & Geography' },
+  { word: 'BURGER', category: 'Food & Drinks' },
+  { word: 'DINOSAUR', category: 'Creatures' },
+  { word: 'SUPERHERO', category: 'Characters' },
+  { word: 'CAMPFIRE', category: 'Outdoors' },
+  { word: 'HEADPHONES', category: 'Gadgets' },
+  { word: 'PENGUIN', category: 'Animals' },
+  { word: 'PIRATE', category: 'Characters' },
+  { word: 'BALLOON', category: 'Party' },
+  { word: 'DIAMOND', category: 'Treasures' },
+  { word: 'CANDLE', category: 'Household' },
+  { word: 'CUPCAKE', category: 'Food & Sweets' },
+  { word: 'SNOWMAN', category: 'Winter' },
+  { word: 'TELESCOPE', category: 'Science' },
+  { word: 'TREASURE', category: 'Adventure' },
+  { word: 'WHALE', category: 'Sea Life' },
+  { word: 'ROCKET', category: 'Space' },
+  { word: 'DRAGON', category: 'Mythical' },
+  { word: 'BICYCLE', category: 'Vehicles' },
+  { word: 'DONUT', category: 'Food & Sweets' },
+  { word: 'PANDA', category: 'Animals' },
+  { word: 'SUNGLASSES', category: 'Fashion' },
+  { word: 'LIGHTBULB', category: 'Inventions' },
+  { word: 'ICE CREAM', category: 'Food & Sweets' },
+  { word: 'SPIDER', category: 'Creatures' },
+  { word: 'TREEHOUSE', category: 'Places' },
+];
+
+const gameTimers = new Map();
+const roundTransitionTimeouts = new Map();
+
+function sanitizeGameStateForMember(gameState, memberId) {
+  if (!gameState) return null;
+  const isDrawer = gameState.currentDrawerId === memberId;
+  const isRoundOver = gameState.status === 'round_end' || gameState.status === 'idle';
+  const hasGuessed = Array.isArray(gameState.guessedMemberIds) && gameState.guessedMemberIds.includes(memberId);
+  const showFullWord = isDrawer || isRoundOver || hasGuessed;
+
+  const rawWord = gameState.word || '';
+  const maskedWord = showFullWord
+    ? rawWord
+    : rawWord.replace(/[A-Za-z0-9]/g, '_ ');
+
+  return {
+    status: gameState.status,
+    currentDrawerId: gameState.currentDrawerId,
+    currentDrawerName: gameState.currentDrawerName,
+    word: showFullWord ? rawWord : '',
+    maskedWord,
+    wordLength: rawWord.length,
+    category: gameState.category,
+    round: gameState.round,
+    maxRounds: gameState.maxRounds,
+    timeRemaining: gameState.timeRemaining,
+    scores: gameState.scores || {},
+    guessedMemberIds: gameState.guessedMemberIds || [],
+    drawHistory: gameState.drawHistory || [],
+    isDrawer,
+  };
+}
+
+async function broadcastGameState(io, roomId) {
+  const room = await roomStore.getRoom(roomId);
+  if (!room || !room.gameState) return;
+
+  try {
+    const roomSockets = await io.in(roomId).fetchSockets();
+    for (const s of roomSockets) {
+      const memId = s.session?.memberId;
+      s.emit('game:state', sanitizeGameStateForMember(room.gameState, memId));
+    }
+  } catch (err) {
+    console.warn('[Game] Broadcast error:', err.message);
+  }
+}
+
+async function startNewRound(io, roomId, explicitDrawerId = null) {
+  const room = await roomStore.getRoom(roomId);
+  if (!room) return;
+
+  if (gameTimers.has(roomId)) {
+    clearInterval(gameTimers.get(roomId));
+    gameTimers.delete(roomId);
+  }
+  if (roundTransitionTimeouts.has(roomId)) {
+    clearTimeout(roundTransitionTimeouts.get(roomId));
+    roundTransitionTimeouts.delete(roomId);
+  }
+
+  const membersList = Object.values(room.members || {});
+  if (membersList.length === 0) return;
+
+  let nextDrawer = null;
+  if (explicitDrawerId && room.members[explicitDrawerId]) {
+    nextDrawer = room.members[explicitDrawerId];
+  } else {
+    const currentDrawerIdx = membersList.findIndex(
+      (m) => m.memberId === room.gameState?.currentDrawerId
+    );
+    const nextIdx = (currentDrawerIdx + 1) % membersList.length;
+    nextDrawer = membersList[nextIdx];
+  }
+
+  const picked = WORD_BANK[Math.floor(Math.random() * WORD_BANK.length)];
+  const nextRound = (room.gameState?.round || 0) + 1;
+  const currentScores = room.gameState?.scores || {};
+
+  membersList.forEach((m) => {
+    if (!currentScores[m.memberId]) {
+      currentScores[m.memberId] = { name: m.displayName, score: 0 };
+    }
+  });
+
+  room.gameState = {
+    status: 'drawing',
+    currentDrawerId: nextDrawer.memberId,
+    currentDrawerName: nextDrawer.displayName,
+    word: picked.word,
+    category: picked.category,
+    round: nextRound,
+    maxRounds: 5,
+    timeRemaining: 60,
+    scores: currentScores,
+    guessedMemberIds: [],
+    drawHistory: [],
+  };
+
+  await roomStore.saveRoom(room);
+  await broadcastGameState(io, roomId);
+
+  io.to(roomId).emit('game:round_start', {
+    round: nextRound,
+    drawerName: nextDrawer.displayName,
+    category: picked.category,
+  });
+
+  const timer = setInterval(async () => {
+    const currentRoom = await roomStore.getRoom(roomId);
+    if (!currentRoom || currentRoom.gameState?.status !== 'drawing') {
+      clearInterval(timer);
+      gameTimers.delete(roomId);
+      return;
+    }
+
+    currentRoom.gameState.timeRemaining -= 1;
+    io.to(roomId).emit('game:tick', {
+      timeRemaining: currentRoom.gameState.timeRemaining,
+    });
+
+    if (currentRoom.gameState.timeRemaining <= 0) {
+      clearInterval(timer);
+      gameTimers.delete(roomId);
+      await endRound(io, roomId, "Time's up!");
+    } else {
+      await roomStore.saveRoom(currentRoom);
+    }
+  }, 1000);
+
+  gameTimers.set(roomId, timer);
+}
+
+async function endRound(io, roomId, reason) {
+  if (gameTimers.has(roomId)) {
+    clearInterval(gameTimers.get(roomId));
+    gameTimers.delete(roomId);
+  }
+
+  const room = await roomStore.getRoom(roomId);
+  if (!room || !room.gameState) return;
+
+  room.gameState.status = 'round_end';
+  await roomStore.saveRoom(room);
+
+  await broadcastGameState(io, roomId);
+
+  io.to(roomId).emit('game:round_end', {
+    word: room.gameState.word,
+    category: room.gameState.category,
+    reason,
+    scores: room.gameState.scores,
+  });
+
+  if (room.gameState.round >= room.gameState.maxRounds) {
+    const transition = setTimeout(async () => {
+      roundTransitionTimeouts.delete(roomId);
+      const finishedRoom = await roomStore.getRoom(roomId);
+      if (finishedRoom && finishedRoom.gameState) {
+        finishedRoom.gameState.status = 'idle';
+        await roomStore.saveRoom(finishedRoom);
+        await broadcastGameState(io, roomId);
+        io.to(roomId).emit('game:match_end', {
+          scores: finishedRoom.gameState.scores,
+        });
+      }
+    }, 5000);
+    roundTransitionTimeouts.set(roomId, transition);
+  } else {
+    const transition = setTimeout(async () => {
+      roundTransitionTimeouts.delete(roomId);
+      await startNewRound(io, roomId);
+    }, 4500);
+    roundTransitionTimeouts.set(roomId, transition);
+  }
+}
+
 // Per-socket rate limiter: max 30 events per 5 seconds
 function createSocketRateLimiter(maxEvents = 30, windowMs = 5000) {
   const eventTimestamps = [];
@@ -118,6 +348,9 @@ export function setupSocketIO(io) {
 
       // Send media state snapshot to connecting socket
       socket.emit('media:state', room.mediaState || { type: 'youtube' });
+
+      // Send game state snapshot to connecting socket
+      socket.emit('game:state', sanitizeGameStateForMember(room.gameState, memberId));
 
       // Broadcast updated member list to all room participants
       io.to(roomId).emit(
@@ -502,8 +735,171 @@ export function setupSocketIO(io) {
       });
     });
 
+    // --- Scribble & Guess Game Handlers ---
+    const isDrawAllowed = createSocketRateLimiter(600, 5000);
+
+    // game:start
+    socket.on('game:start', async () => {
+      if (!isAllowed()) return;
+      await startNewRound(io, roomId);
+    });
+
+    // game:draw
+    socket.on('game:draw', async (payload) => {
+      if (!isDrawAllowed()) return;
+      const parsed = gameDrawSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      const room = await roomStore.getRoom(roomId);
+      if (!room || room.gameState?.status !== 'drawing') return;
+      if (room.gameState.currentDrawerId !== memberId) return;
+
+      if (!Array.isArray(room.gameState.drawHistory)) {
+        room.gameState.drawHistory = [];
+      }
+      if (room.gameState.drawHistory.length < 2500) {
+        room.gameState.drawHistory.push(parsed.data);
+      }
+
+      io.to(roomId).emit('game:draw', parsed.data);
+    });
+
+    // game:clear
+    socket.on('game:clear', async () => {
+      if (!isAllowed()) return;
+      const room = await roomStore.getRoom(roomId);
+      if (!room || room.gameState?.status !== 'drawing') return;
+      if (room.gameState.currentDrawerId !== memberId) return;
+
+      room.gameState.drawHistory = [];
+      await roomStore.saveRoom(room);
+      io.to(roomId).emit('game:clear');
+    });
+
+    // game:guess
+    socket.on('game:guess', async (payload) => {
+      if (!isAllowed()) return;
+      const parsed = gameGuessSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      const room = await roomStore.getRoom(roomId);
+      if (!room || room.gameState?.status !== 'drawing') return;
+
+      // Drawer cannot guess own word
+      if (room.gameState.currentDrawerId === memberId) return;
+
+      // Already guessed correctly in this round
+      if (room.gameState.guessedMemberIds?.includes(memberId)) return;
+
+      const userGuess = parsed.data.text.trim().toUpperCase();
+      const targetWord = (room.gameState.word || '').trim().toUpperCase();
+
+      if (userGuess === targetWord) {
+        const remaining = room.gameState.timeRemaining || 10;
+        const guesserPoints = Math.max(15, Math.round(remaining * 1.5));
+        const drawerPoints = 15;
+
+        if (!room.gameState.scores[memberId]) {
+          room.gameState.scores[memberId] = { name: displayName, score: 0 };
+        }
+        room.gameState.scores[memberId].score += guesserPoints;
+
+        const drawerId = room.gameState.currentDrawerId;
+        if (drawerId && room.gameState.scores[drawerId]) {
+          room.gameState.scores[drawerId].score += drawerPoints;
+        }
+
+        room.gameState.guessedMemberIds.push(memberId);
+        await roomStore.saveRoom(room);
+
+        io.to(roomId).emit('game:correct_guess', {
+          memberId,
+          displayName,
+          points: guesserPoints,
+          word: room.gameState.word,
+          scores: room.gameState.scores,
+        });
+
+        // Let this user see the full word now
+        socket.emit('game:state', sanitizeGameStateForMember(room.gameState, memberId));
+
+        // Check if all active non-drawers have guessed
+        const onlineNonDrawers = Object.values(room.members || {}).filter(
+          (m) => m.isOnline && m.memberId !== drawerId
+        );
+        if (
+          onlineNonDrawers.length > 0 &&
+          room.gameState.guessedMemberIds.length >= onlineNonDrawers.length
+        ) {
+          await endRound(io, roomId, 'Everyone guessed correctly! 🎉');
+        }
+      } else {
+        io.to(roomId).emit('game:chat', {
+          id: crypto.randomUUID(),
+          memberId,
+          displayName,
+          text: parsed.data.text,
+          timestamp: Date.now(),
+        });
+      }
+    });
+
+    // game:skip
+    socket.on('game:skip', async () => {
+      if (!isAllowed()) return;
+      const room = await roomStore.getRoom(roomId);
+      if (!room || room.gameState?.status !== 'drawing') return;
+      await endRound(io, roomId, 'Round was skipped');
+    });
+
+    // game:reset
+    socket.on('game:reset', async () => {
+      if (!isAllowed()) return;
+      if (gameTimers.has(roomId)) {
+        clearInterval(gameTimers.get(roomId));
+        gameTimers.delete(roomId);
+      }
+      if (roundTransitionTimeouts.has(roomId)) {
+        clearTimeout(roundTransitionTimeouts.get(roomId));
+        roundTransitionTimeouts.delete(roomId);
+      }
+      const room = await roomStore.getRoom(roomId);
+      if (room) {
+        room.gameState = {
+          status: 'idle',
+          currentDrawerId: null,
+          currentDrawerName: null,
+          word: '',
+          category: '',
+          round: 0,
+          maxRounds: 5,
+          timeRemaining: 60,
+          scores: {},
+          guessedMemberIds: [],
+          drawHistory: [],
+        };
+        await roomStore.saveRoom(room);
+        await broadcastGameState(io, roomId);
+      }
+    });
+
     // Handle disconnection
     socket.on('disconnect', async () => {
+      const roomBefore = await roomStore.getRoom(roomId);
+      if (
+        roomBefore?.gameState?.status === 'drawing' &&
+        roomBefore.gameState.currentDrawerId === memberId
+      ) {
+        io.to(roomId).emit('game:chat', {
+          id: crypto.randomUUID(),
+          memberId: 'system',
+          displayName: 'System',
+          text: `${displayName} (Drawer) disconnected. Rotating round...`,
+          timestamp: Date.now(),
+        });
+        await endRound(io, roomId, 'Drawer disconnected');
+      }
+
       const result = await roomStore.removeMemberBySocket(socket.id);
       if (result?.room) {
         if (result.sharerLeft) {

@@ -12,6 +12,8 @@ import { LocalMediaModal } from '../features/media/LocalMediaModal';
 import { YouTubeSearchSheet } from '../features/search/YouTubeSearchSheet';
 import { QueueSheet } from '../features/queue/QueueSheet';
 import { LiveKitVoiceProvider } from '../features/voice/LiveKitVoiceProvider';
+import { VoiceEffectsSheet } from '../features/voice/VoiceEffectsSheet';
+import { ScribbleDrawer } from '../features/games/ScribbleDrawer';
 import { FloatingReactions } from '../features/reactions/FloatingReactions';
 import { ReactionPicker } from '../features/reactions/ReactionPicker';
 import { Sheet } from '../components/Sheet';
@@ -38,6 +40,8 @@ export default function RoomPage() {
   const [isMembersOpen, setIsMembersOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const [isVoiceFxOpen, setIsVoiceFxOpen] = useState(false);
+  const [isGamesOpen, setIsGamesOpen] = useState(false);
   const [isLocalMediaModalOpen, setIsLocalMediaModalOpen] = useState(false);
   const [localMediaFile, setLocalMediaFile] = useState(null);
 
@@ -286,6 +290,19 @@ export default function RoomPage() {
           }}
         />
 
+        {/* Microphone Voice Changer Sheet */}
+        <VoiceEffectsSheet
+          open={isVoiceFxOpen}
+          onOpenChange={setIsVoiceFxOpen}
+        />
+
+        {/* Scribble & Guess Mini-game Drawer */}
+        <ScribbleDrawer
+          open={isGamesOpen}
+          onOpenChange={setIsGamesOpen}
+          socket={socket}
+        />
+
         {/* Floating Animated Reactions */}
         <FloatingReactions
           socket={socket}
@@ -305,6 +322,8 @@ export default function RoomPage() {
 
         {/* Bottom Dock */}
         <RoomDock
+          onOpenVoiceFx={() => setIsVoiceFxOpen(true)}
+          onOpenGames={() => setIsGamesOpen(true)}
           onOpenSearch={() => setIsSearchOpen(true)}
           onOpenQueue={() => setIsQueueOpen(true)}
           onToggleMembers={() => setIsMembersOpen((prev) => !prev)}

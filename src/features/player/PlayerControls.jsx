@@ -2,6 +2,7 @@ import React from 'react';
 import { Play, Pause, Volume2, VolumeX, Maximize2, Minimize2 } from 'lucide-react';
 import { Slider } from '../../components/Slider';
 import { Button } from '../../components/Button';
+import { cn } from '../../lib/utils';
 
 function formatTime(seconds) {
   if (!seconds || isNaN(seconds) || seconds < 0) return '0:00';
@@ -28,9 +29,22 @@ export function PlayerControls({
   onToggleMute,
   isFullscreen = false,
   onToggleFullscreen,
+  className = '',
+  onUserInteraction,
 }) {
   return (
-    <div className="w-full bg-[#141419]/90 border-t border-white/10 px-4 py-2.5 backdrop-blur-md flex flex-col gap-2">
+    <div
+      onClick={(e) => {
+        e.stopPropagation();
+        onUserInteraction?.();
+      }}
+      onTouchStart={onUserInteraction}
+      onPointerDown={onUserInteraction}
+      className={cn(
+        'w-full bg-[#141419]/90 border-t border-white/10 px-4 py-2.5 backdrop-blur-md flex flex-col gap-2',
+        className
+      )}
+    >
       {/* Seek bar */}
       <div className="flex items-center gap-3">
         <span className="text-xs text-[#9A978F] tabular-nums font-mono min-w-[36px]">

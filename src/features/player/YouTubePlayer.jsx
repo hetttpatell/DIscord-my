@@ -17,7 +17,9 @@ export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
   const [isMuted, setIsMuted] = useState(false);
   const [isAutoplayBlocked, setIsAutoplayBlocked] = useState(false);
   const [isMobileFullscreen, setIsMobileFullscreen] = useState(false);
-  const [isSlideWindowOpen, setIsSlideWindowOpen] = useState(true);
+  const [isSlideWindowOpen, setIsSlideWindowOpen] = useState(false);
+  const [isControlsVisible, setIsControlsVisible] = useState(true);
+  const controlsTimerRef = useRef(null);
 
   const {
     emitPlay,
@@ -53,6 +55,35 @@ export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
 
   const displayTime = playerState.status === 'playing' ? currentTime : (playerState.positionSec || 0);
 
+  const startControlsTimer = useCallback(() => {
+    if (controlsTimerRef.current) {
+      clearTimeout(controlsTimerRef.current);
+    }
+    controlsTimerRef.current = setTimeout(() => {
+      setIsControlsVisible(false);
+    }, 5000);
+  }, []);
+
+  const resetControlsTimer = useCallback(() => {
+    setIsControlsVisible(true);
+    startControlsTimer();
+  }, [startControlsTimer]);
+
+  const handleVideoAreaTap = useCallback(() => {
+    if (!isMobileFullscreen) return;
+    setIsControlsVisible((prev) => {
+      const next = !prev;
+      if (next) {
+        startControlsTimer();
+      } else {
+        if (controlsTimerRef.current) {
+          clearTimeout(controlsTimerRef.current);
+        }
+      }
+      return next;
+    });
+  }, [isMobileFullscreen, startControlsTimer]);
+
   const lockLandscape = async () => {
     try {
       if (typeof screen !== 'undefined' && screen.orientation && screen.orientation.lock) {
@@ -72,15 +103,21 @@ export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
   const handleEnterFullscreen = useCallback(() => {
     setIsMobileFullscreen(true);
     setIsSlideWindowOpen(true);
+    setIsControlsVisible(true);
+    startControlsTimer();
     if (typeof document !== 'undefined' && document.documentElement.requestFullscreen && !document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(() => {});
     }
     lockLandscape();
-  }, []);
+  }, [startControlsTimer]);
 
   const handleExitFullscreen = useCallback(() => {
     setIsMobileFullscreen(false);
     setIsSlideWindowOpen(false);
+    setIsControlsVisible(true);
+    if (controlsTimerRef.current) {
+      clearTimeout(controlsTimerRef.current);
+    }
     if (typeof document !== 'undefined' && document.fullscreenElement && document.exitFullscreen) {
       document.exitFullscreen().catch(() => {});
     }
@@ -90,6 +127,9 @@ export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
   useEffect(() => {
     return () => {
       unlockOrientation();
+      if (controlsTimerRef.current) {
+        clearTimeout(controlsTimerRef.current);
+      }
     };
   }, []);
 
@@ -254,7 +294,17 @@ export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
     >
       {/* Top Header Bar in Fullscreen Mode */}
       {isMobileFullscreen && (
-        <div className="absolute top-0 left-0 right-0 z-50 flex items-center justify-between p-3 sm:p-4 bg-gradient-to-b from-black/85 via-black/50 to-transparent pointer-events-auto">
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            resetControlsTimer();
+          }}
+          className={`absolute top-0 left-0 right-0 z-50 flex items-center justify-between p-3 sm:p-4 bg-gradient-to-b from-black/85 via-black/50 to-transparent transition-all duration-300 pointer-events-auto ${
+            isControlsVisible
+              ? 'opacity-100 translate-y-0'
+              : 'opacity-0 -translate-y-4 pointer-events-none'
+          }`}
+        >
           {/* Track Info (Left) */}
           <div className="flex items-center gap-2 min-w-0 max-w-[50%]">
             <span className="w-2 h-2 rounded-full bg-[#FF9F1C] animate-pulse shrink-0" />
@@ -268,7 +318,10 @@ export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
             {/* Slide Window Toggle Button */}
             <button
               type="button"
-              onClick={() => setIsSlideWindowOpen((prev) => !prev)}
+              onClick={() => {
+                setIsSlideWindowOpen((prev) => !prev);
+                resetControlsTimer();
+              }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold backdrop-blur-md transition-all active:scale-95 cursor-pointer ${
                 isSlideWindowOpen
                   ? 'bg-[#2EC4B6]/20 border-[#2EC4B6]/50 text-[#2EC4B6]'
@@ -302,9 +355,10 @@ export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
 
       {/* Video Container (Aspect 16:9 on normal, centered without overfilling in fullscreen) */}
       <div
+        onClick={handleVideoAreaTap}
         className={
           isMobileFullscreen
-            ? 'relative w-full flex-1 bg-[#0B0B10] overflow-hidden flex items-center justify-center p-2 sm:p-4 min-h-0'
+            ? 'relative w-full flex-1 bg-[#0B0B10] overflow-hidden flex items-center justify-center p-2 sm:p-4 min-h-0 cursor-pointer'
             : 'relative w-full aspect-video bg-[#0B0B10] overflow-hidden flex items-center justify-center'
         }
       >
@@ -386,28 +440,50 @@ export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
         <FullscreenSlideWindow
           isOpen={isSlideWindowOpen}
           onClose={() => setIsSlideWindowOpen(false)}
-          onOpen={() => setIsSlideWindowOpen(true)}
+          onOpen={() => {
+            setIsSlideWindowOpen(true);
+            resetControlsTimer();
+          }}
           socket={socket}
           members={members}
           currentMemberId={memberId}
           onLocalReaction={onLocalReaction}
+          isControlsVisible={isControlsVisible}
         />
       )}
 
-      {/* Synchronized Custom Controls */}
-      <PlayerControls
-        isPlaying={playerState.status === 'playing'}
-        currentTime={displayTime}
-        duration={duration}
-        volume={volume}
-        isMuted={isMuted}
-        onPlayPause={handlePlayPause}
-        onSeek={handleSeek}
-        onVolumeChange={handleVolumeChange}
-        onToggleMute={handleToggleMute}
-        isFullscreen={isMobileFullscreen}
-        onToggleFullscreen={isMobileFullscreen ? handleExitFullscreen : handleEnterFullscreen}
-      />
+      {/* Synchronized Custom Controls (Timeline bar auto-hides like YouTube) */}
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          resetControlsTimer();
+        }}
+        className={
+          isMobileFullscreen
+            ? `absolute bottom-0 left-0 right-0 z-50 transition-all duration-300 pointer-events-auto ${
+                isControlsVisible
+                  ? 'opacity-100 translate-y-0'
+                  : 'opacity-0 translate-y-6 pointer-events-none'
+              }`
+            : 'w-full'
+        }
+      >
+        <PlayerControls
+          isPlaying={playerState.status === 'playing'}
+          currentTime={displayTime}
+          duration={duration}
+          volume={volume}
+          isMuted={isMuted}
+          onPlayPause={handlePlayPause}
+          onSeek={handleSeek}
+          onVolumeChange={handleVolumeChange}
+          onToggleMute={handleToggleMute}
+          isFullscreen={isMobileFullscreen}
+          onToggleFullscreen={isMobileFullscreen ? handleExitFullscreen : handleEnterFullscreen}
+          onUserInteraction={resetControlsTimer}
+          className={isMobileFullscreen ? 'bg-black/85 backdrop-blur-xl border-t border-white/10' : ''}
+        />
+      </div>
     </div>
   );
 }

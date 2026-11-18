@@ -16,9 +16,11 @@ import { VoiceEffectsSheet } from '../features/voice/VoiceEffectsSheet';
 import { ScribbleArena } from '../features/games/ScribbleArena';
 import { FloatingReactions } from '../features/reactions/FloatingReactions';
 import { ReactionPicker } from '../features/reactions/ReactionPicker';
+import { CameraStrip } from '../features/video/CameraStrip';
 import { Sheet } from '../components/Sheet';
 import { Button } from '../components/Button';
 import { stopMicrophone } from '../lib/microphone';
+import { stopCamera } from '../lib/camera';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 export default function RoomPage() {
@@ -59,6 +61,7 @@ export default function RoomPage() {
     const handleBeforeUnload = () => {
       disconnectSocket();
       stopMicrophone();
+      stopCamera();
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
@@ -92,6 +95,23 @@ export default function RoomPage() {
           members: currentList.map((m) =>
             m.memberId === targetId || m.id === targetId
               ? { ...m, isMicEnabled, isSpeaking: isMicEnabled }
+              : m
+          ),
+        };
+      });
+    };
+
+    const handleCameraState = ({ memberId: targetId, isCameraEnabled }) => {
+      useAppStore.setState((prev) => {
+        const currentList = Array.isArray(prev.members)
+          ? prev.members
+          : (prev.members && Array.isArray(prev.members.members)
+            ? prev.members.members
+            : Object.values(prev.members || {}));
+        return {
+          members: currentList.map((m) =>
+            m.memberId === targetId || m.id === targetId
+              ? { ...m, isCameraEnabled }
               : m
           ),
         };
@@ -152,6 +172,7 @@ export default function RoomPage() {
 
     socket.on('room:members', handleMembers);
     socket.on('voice:state', handleVoiceState);
+    socket.on('camera:state', handleCameraState);
     socket.on('queue:update', handleQueueUpdate);
     socket.on('queue:error', handleQueueError);
     socket.on('media:state', handleMediaState);
@@ -166,6 +187,7 @@ export default function RoomPage() {
     return () => {
       socket.off('room:members', handleMembers);
       socket.off('voice:state', handleVoiceState);
+      socket.off('camera:state', handleCameraState);
       socket.off('queue:update', handleQueueUpdate);
       socket.off('queue:error', handleQueueError);
       socket.off('media:state', handleMediaState);
@@ -178,6 +200,7 @@ export default function RoomPage() {
   const handleLeave = () => {
     disconnectSocket();
     stopMicrophone();
+    stopCamera();
     clearSession();
     navigate('/');
   };
@@ -385,6 +408,11 @@ export default function RoomPage() {
             });
           }}
         />
+
+        {/* Floating / Docked Live Camera Strip */}
+        <ErrorBoundary>
+          <CameraStrip />
+        </ErrorBoundary>
 
         {/* Bottom Dock */}
         <RoomDock

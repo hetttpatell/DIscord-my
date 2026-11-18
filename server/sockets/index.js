@@ -44,6 +44,10 @@ const voiceStateSchema = z.object({
   isMicEnabled: z.boolean(),
 });
 
+const cameraStateSchema = z.object({
+  isCameraEnabled: z.boolean(),
+});
+
 const reactionSchema = z.object({
   emoji: z.string().trim().min(1).max(16),
 });
@@ -761,6 +765,19 @@ export function setupSocketIO(io) {
         memberId,
         displayName,
         isMicEnabled: parsed.data.isMicEnabled,
+      });
+    });
+
+    // camera:state
+    socket.on('camera:state', (payload) => {
+      if (!isAllowed()) return;
+      const parsed = cameraStateSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      io.to(roomId).emit('camera:state', {
+        memberId,
+        displayName,
+        isCameraEnabled: parsed.data.isCameraEnabled,
       });
     });
 

@@ -202,21 +202,28 @@ function LiveKitMicButton({ className }) {
   return (
     <>
       <Button
-        variant={isMicActive ? 'primary' : 'secondary'}
+        variant="secondary"
         size="default"
         onClick={handleToggleClick}
         aria-label={isMicActive ? 'Mute microphone' : 'Unmute microphone'}
-        className={className}
+        className={`${className} transition-all duration-200 ${
+          isMicActive
+            ? '!bg-[#FF9F0A]/15 !border-[#FF9F0A]/40 !text-[#FF9F0A] shadow-[0_0_16px_rgba(255,159,10,0.2)]'
+            : '!bg-white/[0.08] !border-white/[0.08] !text-white/70 hover:!text-white hover:!bg-white/[0.14]'
+        }`}
       >
         {isMicActive ? (
           <>
-            <Mic className="w-4 h-4 shrink-0 text-[#0B0B10]" />
-            <span className="text-[11px] sm:text-xs text-[#0B0B10] font-bold whitespace-nowrap">On Air</span>
+            <div className="relative">
+              <Mic className="w-4 h-4 shrink-0 text-[#FF9F0A]" />
+              <span className="absolute -top-1 -right-1 w-1.5 h-1.5 rounded-full bg-[#FF9F0A] animate-pulse" />
+            </div>
+            <span className="text-[10px] sm:text-xs text-[#FF9F0A] font-bold whitespace-nowrap">On Air</span>
           </>
         ) : (
           <>
-            <MicOff className="w-4 h-4 shrink-0 text-[#FF5A5F]" />
-            <span className="text-[11px] sm:text-xs font-semibold whitespace-nowrap">Muted</span>
+            <MicOff className="w-4 h-4 shrink-0 text-[#FF453A]" />
+            <span className="text-[10px] sm:text-xs font-semibold whitespace-nowrap">Muted</span>
           </>
         )}
       </Button>
@@ -383,21 +390,28 @@ function FallbackMicButton({ className }) {
   return (
     <>
       <Button
-        variant={isMicActive ? 'primary' : 'secondary'}
+        variant="secondary"
         size="default"
         onClick={handleToggleClick}
         aria-label={isMicActive ? 'Mute microphone' : 'Unmute microphone'}
-        className={className}
+        className={`${className} transition-all duration-200 ${
+          isMicActive
+            ? '!bg-[#FF9F0A]/15 !border-[#FF9F0A]/40 !text-[#FF9F0A] shadow-[0_0_16px_rgba(255,159,10,0.2)]'
+            : '!bg-white/[0.08] !border-white/[0.08] !text-white/70 hover:!text-white hover:!bg-white/[0.14]'
+        }`}
       >
         {isMicActive ? (
           <>
-            <Mic className="w-4 h-4 shrink-0 text-[#0B0B10]" />
-            <span className="text-[11px] sm:text-xs text-[#0B0B10] font-bold whitespace-nowrap">On Air</span>
+            <div className="relative">
+              <Mic className="w-4 h-4 shrink-0 text-[#FF9F0A]" />
+              <span className="absolute -top-1 -right-1 w-1.5 h-1.5 rounded-full bg-[#FF9F0A] animate-pulse" />
+            </div>
+            <span className="text-[10px] sm:text-xs text-[#FF9F0A] font-bold whitespace-nowrap">On Air</span>
           </>
         ) : (
           <>
-            <MicOff className="w-4 h-4 shrink-0 text-[#FF5A5F]" />
-            <span className="text-[11px] sm:text-xs font-semibold whitespace-nowrap">Muted</span>
+            <MicOff className="w-4 h-4 shrink-0 text-[#FF453A]" />
+            <span className="text-[10px] sm:text-xs font-semibold whitespace-nowrap">Muted</span>
           </>
         )}
       </Button>

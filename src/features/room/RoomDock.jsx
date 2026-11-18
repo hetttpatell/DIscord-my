@@ -11,6 +11,7 @@ export function RoomDock({
   onToggleMembers,
   queueCount = 0,
   membersCount = 1,
+  isGameActive = false,
   micSlot,
 }) {
   const buttonClass =
@@ -43,10 +44,22 @@ export function RoomDock({
           size="default"
           onClick={onOpenGames}
           aria-label="Play Scribble & Guess mini-game"
-          className={buttonClass}
+          className={`${buttonClass} relative`}
         >
-          <Gamepad2 className="w-4 h-4 shrink-0 text-[#FF5A5F]" />
-          <span className="text-[10px] sm:text-xs font-semibold whitespace-nowrap tracking-tight">Games</span>
+          <div className="relative">
+            <Gamepad2 className="w-4 h-4 shrink-0 text-[#FF5A5F]" />
+            {isGameActive && (
+              <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-[#FF5A5F] animate-ping" />
+            )}
+          </div>
+          <span className="text-[10px] sm:text-xs font-semibold whitespace-nowrap tracking-tight flex items-center gap-1">
+            <span>Games</span>
+            {isGameActive && (
+              <span className="px-1 py-0.5 text-[8px] font-extrabold uppercase bg-[#FF5A5F] text-white rounded-md leading-none shadow-sm">
+                Live
+              </span>
+            )}
+          </span>
         </Button>
 
         {/* Search YouTube Button */}

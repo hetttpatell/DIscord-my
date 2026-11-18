@@ -666,3 +666,4 @@ export function ScribbleDrawer({ open, onOpenChange, socket }) {
 }
 
 export default ScribbleDrawer;
+

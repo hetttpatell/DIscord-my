@@ -13,10 +13,11 @@ import { YouTubeSearchSheet } from '../features/search/YouTubeSearchSheet';
 import { QueueSheet } from '../features/queue/QueueSheet';
 import { LiveKitVoiceProvider } from '../features/voice/LiveKitVoiceProvider';
 import { VoiceEffectsSheet } from '../features/voice/VoiceEffectsSheet';
-import { ScribbleDrawer } from '../features/games/ScribbleDrawer';
+import { ScribbleArena } from '../features/games/ScribbleArena';
 import { FloatingReactions } from '../features/reactions/FloatingReactions';
 import { ReactionPicker } from '../features/reactions/ReactionPicker';
 import { Sheet } from '../components/Sheet';
+import { Button } from '../components/Button';
 import { stopMicrophone } from '../lib/microphone';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
@@ -42,6 +43,7 @@ export default function RoomPage() {
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [isVoiceFxOpen, setIsVoiceFxOpen] = useState(false);
   const [isGamesOpen, setIsGamesOpen] = useState(false);
+  const [activeGameInfo, setActiveGameInfo] = useState(null);
   const [isLocalMediaModalOpen, setIsLocalMediaModalOpen] = useState(false);
   const [localMediaFile, setLocalMediaFile] = useState(null);
 
@@ -117,11 +119,45 @@ export default function RoomPage() {
       }
     };
 
+    const handleGameStarted = (data) => {
+      setActiveGameInfo(data);
+      toast(
+        `🎮 ${data.startedBy} started Scribble & Guess!`,
+        {
+          description: `Round ${data.round}: ${data.drawerName} is drawing (${data.category})`,
+          duration: 10000,
+          action: {
+            label: 'Join Game 🚀',
+            onClick: () => setIsGamesOpen(true),
+          },
+        }
+      );
+    };
+
+    const handleGameState = (state) => {
+      if (state && state.status === 'drawing') {
+        setActiveGameInfo({
+          round: state.round,
+          drawerName: state.currentDrawerName,
+          category: state.category,
+        });
+      } else if (state && state.status === 'idle') {
+        setActiveGameInfo(null);
+      }
+    };
+
+    const handleMatchEnd = () => {
+      setActiveGameInfo(null);
+    };
+
     socket.on('room:members', handleMembers);
     socket.on('voice:state', handleVoiceState);
     socket.on('queue:update', handleQueueUpdate);
     socket.on('queue:error', handleQueueError);
     socket.on('media:state', handleMediaState);
+    socket.on('game:started', handleGameStarted);
+    socket.on('game:state', handleGameState);
+    socket.on('game:match_end', handleMatchEnd);
 
     if (!socket.connected && !socket.connecting) {
       socket.connect();
@@ -133,6 +169,9 @@ export default function RoomPage() {
       socket.off('queue:update', handleQueueUpdate);
       socket.off('queue:error', handleQueueError);
       socket.off('media:state', handleMediaState);
+      socket.off('game:started', handleGameStarted);
+      socket.off('game:state', handleGameState);
+      socket.off('game:match_end', handleMatchEnd);
     };
   }, [socket, setMediaState]);
 
@@ -296,10 +335,37 @@ export default function RoomPage() {
           onOpenChange={setIsVoiceFxOpen}
         />
 
-        {/* Scribble & Guess Mini-game Drawer */}
-        <ScribbleDrawer
+        {/* Floating Active Match Banner when Arena is closed */}
+        {activeGameInfo && !isGamesOpen && (
+          <aside
+            aria-label="Active match announcement"
+            className="fixed top-16 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 px-4 py-2 rounded-2xl bg-[#141419]/95 border border-[#FF9F1C]/40 backdrop-blur-xl shadow-2xl shadow-[#FF9F1C]/20 animate-in slide-in-from-top duration-300"
+          >
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#FF5A5F] opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#FF5A5F]" />
+            </span>
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="font-extrabold text-white">Scribble Live:</span>
+              <span className="text-[#9A978F]">
+                Round {activeGameInfo.round} • {activeGameInfo.drawerName} is drawing
+              </span>
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setIsGamesOpen(true)}
+              className="h-7 px-3 text-xs font-bold rounded-xl ml-1 shadow-md shadow-[#FF9F1C]/20"
+            >
+              Join Game 🎮
+            </Button>
+          </aside>
+        )}
+
+        {/* Dedicated Scribble & Guess Arena Screen */}
+        <ScribbleArena
           open={isGamesOpen}
-          onOpenChange={setIsGamesOpen}
+          onClose={() => setIsGamesOpen(false)}
           socket={socket}
         />
 
@@ -329,6 +395,7 @@ export default function RoomPage() {
           onToggleMembers={() => setIsMembersOpen((prev) => !prev)}
           queueCount={totalQueueCount}
           membersCount={Array.isArray(members) ? members.length : 1}
+          isGameActive={Boolean(activeGameInfo)}
         />
       </div>
     </LiveKitVoiceProvider>

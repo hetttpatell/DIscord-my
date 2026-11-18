@@ -159,7 +159,7 @@ async function broadcastGameState(io, roomId) {
   }
 }
 
-async function startNewRound(io, roomId, explicitDrawerId = null) {
+async function startNewRound(io, roomId, explicitDrawerId = null, starterName = null) {
   const room = await roomStore.getRoom(roomId);
   if (!room) return;
 
@@ -212,6 +212,16 @@ async function startNewRound(io, roomId, explicitDrawerId = null) {
 
   await roomStore.saveRoom(room);
   await broadcastGameState(io, roomId);
+
+  // Broadcast to room that a game/round has started
+  io.to(roomId).emit('game:started', {
+    startedBy: starterName || nextDrawer.displayName,
+    drawerName: nextDrawer.displayName,
+    drawerMemberId: nextDrawer.memberId,
+    category: picked.category,
+    round: nextRound,
+    maxRounds: 5,
+  });
 
   io.to(roomId).emit('game:round_start', {
     round: nextRound,
@@ -741,7 +751,7 @@ export function setupSocketIO(io) {
     // game:start
     socket.on('game:start', async () => {
       if (!isAllowed()) return;
-      await startNewRound(io, roomId);
+      await startNewRound(io, roomId, null, displayName);
     });
 
     // game:draw

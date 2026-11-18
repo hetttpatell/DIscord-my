@@ -3,23 +3,41 @@ import { io as ClientIO } from 'socket.io-client';
 import { roomStore } from '../server/services/roomStore.js';
 import { signSessionToken } from '../server/services/security.js';
 import { httpServer } from '../server/index.js';
-import { VOICE_PRESETS, getCurrentVoicePreset, setVoicePreset } from '../src/lib/voiceEffects.js';
+import {
+  VOICE_PRESETS,
+  getCurrentVoicePreset,
+  setVoicePreset,
+  setVoiceMonitor,
+  isVoiceMonitorActive,
+} from '../src/lib/voiceEffects.js';
 
 describe('Voice Effects DSP Presets', () => {
-  it('exposes 6 voice presets with valid id, name, and emoji', () => {
-    expect(VOICE_PRESETS).toHaveLength(6);
+  it('exposes 9 distinct voice presets with valid id, name, and emoji', () => {
+    expect(VOICE_PRESETS).toHaveLength(9);
     const ids = VOICE_PRESETS.map((p) => p.id);
     expect(ids).toContain('normal');
+    expect(ids).toContain('chipmunk');
+    expect(ids).toContain('deep');
     expect(ids).toContain('robot');
     expect(ids).toContain('radio');
-    expect(ids).toContain('deep');
-    expect(ids).toContain('chipmunk');
+    expect(ids).toContain('megaphone');
     expect(ids).toContain('echo');
+    expect(ids).toContain('alien');
+    expect(ids).toContain('cathedral');
   });
 
-  it('allows getting and setting voice presets dynamically', () => {
-    setVoicePreset('robot');
-    expect(getCurrentVoicePreset()).toBe('robot');
+  it('allows getting, setting presets and headphone monitoring', () => {
+    setVoicePreset('chipmunk');
+    expect(getCurrentVoicePreset()).toBe('chipmunk');
+
+    setVoicePreset('deep');
+    expect(getCurrentVoicePreset()).toBe('deep');
+
+    setVoiceMonitor(true);
+    expect(isVoiceMonitorActive()).toBe(true);
+
+    setVoiceMonitor(false);
+    expect(isVoiceMonitorActive()).toBe(false);
 
     setVoicePreset('normal');
     expect(getCurrentVoicePreset()).toBe('normal');
@@ -50,7 +68,7 @@ describe('Scribble & Guess Socket Mini-Game', () => {
     });
   });
 
-  it('handles game:start, drawing strokes, and guessing words', async () => {
+  it('handles game:start, broadcasting game:started to others, drawing strokes, and guessing words', async () => {
     await roomStore.createRoom({
       roomId,
       passwordHash: 'hash123',
@@ -98,13 +116,16 @@ describe('Scribble & Guess Socket Mini-Game', () => {
     expect(initialStateReceived).toBeDefined();
     expect(initialStateReceived.status).toBe('idle');
 
-    // 2. Start game
-    const roundStartPromise = new Promise((resolve) => {
-      guesserSocket.once('game:round_start', resolve);
+    // 2. Start game: verify guesser receives game:started notification
+    const startedPromise = new Promise((resolve) => {
+      guesserSocket.once('game:started', resolve);
     });
+
     drawerSocket.emit('game:start');
-    const roundData = await roundStartPromise;
-    expect(roundData.round).toBe(1);
+    const startedData = await startedPromise;
+    expect(startedData.round).toBe(1);
+    expect(startedData.drawerName).toBe('DrawerUser');
+    expect(startedData.startedBy).toBe('DrawerUser');
 
     // 3. Test draw stroke relay
     const drawPromise = new Promise((resolve) => {

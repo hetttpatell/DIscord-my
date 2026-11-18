@@ -34,12 +34,14 @@ export default function App() {
         <Toaster
           position="top-center"
           theme="dark"
+          closeButton
+          richColors
+          swipeDirections={['top', 'right', 'left', 'bottom']}
+          duration={3500}
+          gap={10}
+          visibleToasts={3}
           toastOptions={{
-            style: {
-              background: '#1C1C24',
-              color: '#F4F1EA',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-            },
+            duration: 3500,
           }}
         />
       </TooltipProvider>

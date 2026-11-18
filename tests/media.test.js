@@ -188,3 +188,4 @@ describe('Shared Local Media Watchparty Socket Events', () => {
     expect(resetState.sharerId).toBeNull();
   });
 });
+

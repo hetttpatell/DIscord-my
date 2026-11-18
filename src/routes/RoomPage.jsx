@@ -139,6 +139,51 @@ export default function RoomPage() {
     navigate('/');
   };
 
+  const handleStartShare = (file) => {
+    if (!file) return;
+    setLocalMediaFile(file);
+
+    // 1. Optimistically update local mediaState so the player mounts instantly
+    setMediaState({
+      type: 'local',
+      sharerId: memberId,
+      sharerName: useAppStore.getState().displayName || 'You',
+      fileName: file.name,
+      durationSec: 0,
+      positionSec: 0,
+      status: 'playing',
+    });
+
+    // 2. Pause YouTube playback in the client store
+    useAppStore.setState((prev) => ({
+      playerState: { ...prev.playerState, status: 'paused' },
+    }));
+
+    // 3. Emit media:start over socket so the room switches and receives stream
+    const activeSock = socket?.connected ? socket : (typeof window !== 'undefined' ? window.__socket : socket);
+    activeSock?.emit('media:start', {
+      fileName: file.name,
+      durationSec: 0,
+    });
+
+    toast.success(`Started watchparty for "${file.name}"`);
+  };
+
+  const handleStopSharing = () => {
+    setLocalMediaFile(null);
+    setMediaState({
+      type: 'youtube',
+      sharerId: null,
+      sharerName: null,
+      fileName: null,
+      durationSec: 0,
+      positionSec: 0,
+      status: 'paused',
+    });
+    const activeSock = socket?.connected ? socket : (typeof window !== 'undefined' ? window.__socket : socket);
+    activeSock?.emit('media:stop');
+  };
+
   return (
     <LiveKitVoiceProvider>
       <div className="relative min-h-dvh w-full flex flex-col bg-[#0B0B10] text-[#F4F1EA] select-none overflow-hidden pb-20">
@@ -161,9 +206,7 @@ export default function RoomPage() {
               <SharedMediaPlayer
                 socket={socket}
                 localMediaFile={localMediaFile}
-                onStopSharing={() => {
-                  setLocalMediaFile(null);
-                }}
+                onStopSharing={handleStopSharing}
                 onLocalReaction={(data) => {
                   localReactionRef.current?.({
                     ...data,
@@ -229,9 +272,7 @@ export default function RoomPage() {
         <LocalMediaModal
           open={isLocalMediaModalOpen}
           onOpenChange={setIsLocalMediaModalOpen}
-          onStartShare={(file) => {
-            setLocalMediaFile(file);
-          }}
+          onStartShare={handleStartShare}
         />
 
         {/* Playback Queue Drawer */}

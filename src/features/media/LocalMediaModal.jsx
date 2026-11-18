@@ -16,18 +16,50 @@ export function LocalMediaModal({ open, onOpenChange, onStartShare }) {
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
 
-  const handleFileChange = (e) => {
-    const file = e.target.files?.[0];
+  const processSelectedFile = (file) => {
     if (!file) return;
 
-    if (!file.type.startsWith('video/') && !file.name.match(/\.(mp4|webm|mkv|mov|avi)$/i)) {
+    const isVideoType = file.type && file.type.startsWith('video/');
+    const isVideoExt = file.name && file.name.match(/\.(mp4|webm|mkv|mov|avi|m4v|3gp|ogv)$/i);
+
+    if (!isVideoType && !isVideoExt) {
       setErrorMsg('Please select a valid video file (MP4, WebM, MOV, MKV).');
       return;
     }
 
     setErrorMsg(null);
     setSelectedFile(file);
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processSelectedFile(file);
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      processSelectedFile(file);
+    }
   };
 
   const handleStart = () => {
@@ -40,6 +72,7 @@ export function LocalMediaModal({ open, onOpenChange, onStartShare }) {
   const handleCancel = () => {
     setSelectedFile(null);
     setErrorMsg(null);
+    setIsDragging(false);
     onOpenChange(false);
   };
 
@@ -57,7 +90,7 @@ export function LocalMediaModal({ open, onOpenChange, onStartShare }) {
         <input
           ref={fileInputRef}
           type="file"
-          accept="video/mp4,video/webm,video/ogg,video/quicktime,video/*,.mkv,.mp4,.webm,.mov"
+          accept="video/*,.mp4,.webm,.mkv,.mov,.avi,.m4v"
           className="hidden"
           onChange={handleFileChange}
         />
@@ -65,7 +98,14 @@ export function LocalMediaModal({ open, onOpenChange, onStartShare }) {
         {!selectedFile ? (
           <div
             onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-white/15 hover:border-[#FF9F1C]/60 rounded-2xl p-6 sm:p-8 flex flex-col items-center justify-center gap-3 bg-[#0B0B10]/50 hover:bg-[#141419] transition-all cursor-pointer group active:scale-[0.99]"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 flex flex-col items-center justify-center gap-3 transition-all cursor-pointer group active:scale-[0.99] ${
+              isDragging
+                ? 'border-[#FF9F1C] bg-[#FF9F1C]/10 scale-[1.01]'
+                : 'border-white/15 hover:border-[#FF9F1C]/60 bg-[#0B0B10]/50 hover:bg-[#141419]'
+            }`}
           >
             <div className="w-14 h-14 rounded-2xl bg-[#FF9F1C]/10 border border-[#FF9F1C]/20 flex items-center justify-center text-[#FF9F1C] group-hover:scale-110 transition-transform shadow-lg shadow-[#FF9F1C]/10">
               <Upload className="w-7 h-7" />
@@ -73,7 +113,7 @@ export function LocalMediaModal({ open, onOpenChange, onStartShare }) {
 
             <div className="text-center">
               <p className="text-sm font-semibold text-[#F4F1EA]">
-                Tap to pick a video file
+                {isDragging ? 'Drop video file here' : 'Tap to pick or drop a video file'}
               </p>
               <p className="text-xs text-[#9A978F] mt-1">
                 Choose from your phone gallery or computer files

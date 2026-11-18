@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useRoomContext, useTracks, VideoTrack } from '@livekit/components-react';
 import { Track, LocalVideoTrack, LocalAudioTrack } from 'livekit-client';
-import { Film, Radio, StopCircle, Maximize2, Minimize2, Users, Smile } from 'lucide-react';
+import { Film, Radio, StopCircle, Maximize2, Minimize2, Users, Smile, Play } from 'lucide-react';
 import { PlayerControls } from '../player/PlayerControls';
 import { FullscreenSlideWindow } from '../player/FullscreenSlideWindow';
 import { useAppStore } from '../../stores/useAppStore';
@@ -15,7 +15,7 @@ export function SharedMediaPlayer({
 }) {
   const { memberId, members, mediaState } = useAppStore();
   const room = useRoomContext();
-  const isSharer = memberId === mediaState?.sharerId;
+  const isSharer = Boolean(localMediaFile) || memberId === mediaState?.sharerId;
 
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -42,6 +42,7 @@ export function SharedMediaPlayer({
   const [isPlaying, setIsPlaying] = useState(mediaState?.status === 'playing');
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
+  const [isAutoplayBlocked, setIsAutoplayBlocked] = useState(false);
 
   // Fullscreen & Auto-hide states
   const [isMobileFullscreen, setIsMobileFullscreen] = useState(false);
@@ -52,18 +53,37 @@ export function SharedMediaPlayer({
   // LiveKit ScreenShare tracks for viewers
   const screenShareTracks = useTracks([Track.Source.ScreenShare]);
   const remoteTrackRef = screenShareTracks.find(
-    (t) => t.participant?.identity === mediaState?.sharerId || t.source === Track.Source.ScreenShare
+    (t) => !t.participant?.isLocal && (t.participant?.identity === mediaState?.sharerId || t.source === Track.Source.ScreenShare)
   );
 
   // 2. Sharer: Publish video & audio tracks to LiveKit room
   useEffect(() => {
-    if (!isSharer || !room?.localParticipant) return;
+    if (!isSharer) return;
 
     let isCancelled = false;
 
     const publishMediaStream = async () => {
       const video = videoRef.current;
       if (!video) return;
+
+      if (!room || !room.localParticipant) {
+        console.warn('[SharedMedia] LiveKit room or localParticipant not ready.');
+        return;
+      }
+
+      // If room is still connecting, await connection then publish
+      if (room.state !== 'connected') {
+        const handleConnected = () => {
+          room.off('connected', handleConnected);
+          if (!isCancelled) {
+            publishMediaStream();
+          }
+        };
+        room.on('connected', handleConnected);
+        return;
+      }
+
+      if (publishedVideoTrackRef.current) return;
 
       try {
         const stream = video.captureStream
@@ -80,7 +100,7 @@ export function SharedMediaPlayer({
         const videoMediaTrack = stream.getVideoTracks()[0];
         const audioMediaTrack = stream.getAudioTracks()[0];
 
-        if (videoMediaTrack && !isCancelled) {
+        if (videoMediaTrack && !isCancelled && !publishedVideoTrackRef.current) {
           const lkVideo = new LocalVideoTrack(videoMediaTrack, { name: 'shared-video' });
           publishedVideoTrackRef.current = lkVideo;
           await room.localParticipant.publishTrack(lkVideo, {
@@ -88,7 +108,7 @@ export function SharedMediaPlayer({
           });
         }
 
-        if (audioMediaTrack && !isCancelled) {
+        if (audioMediaTrack && !isCancelled && !publishedAudioTrackRef.current) {
           const lkAudio = new LocalAudioTrack(audioMediaTrack, { name: 'shared-audio' });
           publishedAudioTrackRef.current = lkAudio;
           await room.localParticipant.publishTrack(lkAudio, {
@@ -101,18 +121,32 @@ export function SharedMediaPlayer({
     };
 
     const handleLoadedMetadata = () => {
-      if (videoRef.current) {
-        const dur = videoRef.current.duration || 0;
-        setDuration(dur);
-        if (socket) {
-          socket.emit('media:start', {
-            fileName: localMediaFile?.name || 'Local Video',
-            durationSec: dur,
+      const video = videoRef.current;
+      if (!video) return;
+
+      const dur = video.duration || 0;
+      setDuration(dur);
+
+      if (socket) {
+        socket.emit('media:start', {
+          fileName: localMediaFile?.name || mediaState?.fileName || 'Local Video',
+          durationSec: dur,
+        });
+      }
+
+      publishMediaStream();
+
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            setIsPlaying(true);
+            setIsAutoplayBlocked(false);
+          })
+          .catch(() => {
+            setIsPlaying(false);
+            setIsAutoplayBlocked(true);
           });
-        }
-        publishMediaStream();
-        videoRef.current.play().catch(() => {});
-        setIsPlaying(true);
       }
     };
 
@@ -122,6 +156,7 @@ export function SharedMediaPlayer({
         handleLoadedMetadata();
       } else {
         videoEl.addEventListener('loadedmetadata', handleLoadedMetadata);
+        videoEl.addEventListener('canplay', handleLoadedMetadata, { once: true });
       }
     }
 
@@ -145,7 +180,7 @@ export function SharedMediaPlayer({
         publishedAudioTrackRef.current = null;
       }
     };
-  }, [isSharer, room, localMediaFile, socket]);
+  }, [isSharer, room, localMediaFile, mediaState?.fileName, socket]);
 
   // 3. Sync time for sharer locally
   useEffect(() => {
@@ -203,21 +238,45 @@ export function SharedMediaPlayer({
   }, [socket, isSharer]);
 
   // 5. Controls & Actions
+  const handleTapToPlay = () => {
+    if (videoRef.current) {
+      videoRef.current
+        .play()
+        .then(() => {
+          setIsPlaying(true);
+          setIsAutoplayBlocked(false);
+          const activeSock = socket?.connected ? socket : (typeof window !== 'undefined' ? window.__socket : socket);
+          activeSock?.emit('media:control', {
+            action: 'play',
+            positionSec: videoRef.current.currentTime || 0,
+          });
+        })
+        .catch((err) => {
+          console.warn('[SharedMedia] Tap to play error:', err);
+        });
+    }
+  };
+
   const handlePlayPause = () => {
     const nextPlaying = !isPlaying;
     setIsPlaying(nextPlaying);
 
     if (isSharer && videoRef.current) {
-      if (nextPlaying) videoRef.current.play().catch(() => {});
-      else videoRef.current.pause();
+      if (nextPlaying) {
+        videoRef.current
+          .play()
+          .then(() => setIsAutoplayBlocked(false))
+          .catch(() => setIsAutoplayBlocked(true));
+      } else {
+        videoRef.current.pause();
+      }
     }
 
-    if (socket) {
-      socket.emit('media:control', {
-        action: nextPlaying ? 'play' : 'pause',
-        positionSec: isSharer && videoRef.current ? videoRef.current.currentTime : currentTime,
-      });
-    }
+    const activeSock = socket?.connected ? socket : (typeof window !== 'undefined' ? window.__socket : socket);
+    activeSock?.emit('media:control', {
+      action: nextPlaying ? 'play' : 'pause',
+      positionSec: isSharer && videoRef.current ? videoRef.current.currentTime : currentTime,
+    });
   };
 
   const handleSeek = (posSec) => {
@@ -463,6 +522,25 @@ export function SharedMediaPlayer({
               </p>
             </div>
           </div>
+        )}
+
+        {/* Autoplay Blocked Tap-to-Play Overlay */}
+        {isSharer && isAutoplayBlocked && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleTapToPlay();
+            }}
+            className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm cursor-pointer p-4 text-center transition-all animate-fade-in"
+            aria-label="Tap to start video"
+          >
+            <div className="w-16 h-16 rounded-full bg-[#FF9F1C] text-[#0B0B10] flex items-center justify-center shadow-lg shadow-[#FF9F1C]/40 mb-3 animate-pulse">
+              <Play className="w-8 h-8 fill-current ml-1" />
+            </div>
+            <span className="text-base font-bold text-[#F4F1EA]">Tap to start video</span>
+            <span className="text-xs text-[#9A978F] mt-1">Browser requires a tap to enable playback</span>
+          </button>
         )}
 
         {/* Mobile Fullscreen trigger button on video */}

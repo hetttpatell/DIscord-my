@@ -280,6 +280,7 @@ export function setupSocketIO(io) {
       const parsed = positionSchema.safeParse(payload);
       if (!parsed.success) return;
 
+      const currentRoom = await roomStore.getRoom(roomId);
       const updated = await roomStore.updatePlayerState(roomId, {
         status: 'playing',
         positionSec: parsed.data.positionSec,
@@ -309,6 +310,7 @@ export function setupSocketIO(io) {
       const parsed = positionSchema.safeParse(payload);
       if (!parsed.success) return;
 
+      const currentRoom = await roomStore.getRoom(roomId);
       const updated = await roomStore.updatePlayerState(roomId, {
         status: 'paused',
         positionSec: parsed.data.positionSec,

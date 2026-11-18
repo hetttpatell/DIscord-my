@@ -153,27 +153,84 @@ export function useYouTubeSync({ socket, playerRef, isPlayerReady }) {
     };
   }, [isPlayerReady, playerRef, playerState.status, getExpectedPosition]);
 
-  // Client actions emitted to server
-  const emitPlay = useCallback(async () => {
-    if (!socket || isApplyingRemoteChange.current) return;
+  // Helper to fetch current player position quickly without blocking on postMessage
+  const getFastCurrentTime = useCallback(async (fallback = 0) => {
     const player = playerRef.current;
-    const pos = (await player?.getCurrentTime?.()) || 0;
-    socket.emit('player:play', { positionSec: pos });
-  }, [socket, playerRef]);
+    if (!player || typeof player.getCurrentTime !== 'function') return fallback;
+    try {
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(fallback), 80));
+      const pos = await Promise.race([player.getCurrentTime(), timeoutPromise]);
+      return typeof pos === 'number' && !isNaN(pos) ? pos : fallback;
+    } catch {
+      return fallback;
+    }
+  }, [playerRef]);
+
+  // Client actions emitted to server (optimistic local execution prevents dropped clicks & satisfies autoplay policy)
+  const emitPlay = useCallback(async () => {
+    isApplyingRemoteChange.current = false;
+    const player = playerRef.current;
+
+    // Immediately trigger local playback within user click context
+    try {
+      player?.playVideo?.();
+    } catch {}
+
+    const fallbackPos = playerState.positionSec || 0;
+    const pos = await getFastCurrentTime(fallbackPos);
+
+    setPlayerState({
+      ...playerState,
+      status: 'playing',
+      positionSec: pos,
+    });
+
+    if (socket) {
+      socket.emit('player:play', { positionSec: pos });
+    }
+  }, [socket, playerRef, playerState, setPlayerState, getFastCurrentTime]);
 
   const emitPause = useCallback(async () => {
-    if (!socket || isApplyingRemoteChange.current) return;
+    isApplyingRemoteChange.current = false;
     const player = playerRef.current;
-    const pos = (await player?.getCurrentTime?.()) || 0;
-    socket.emit('player:pause', { positionSec: pos });
-  }, [socket, playerRef]);
+
+    // Immediately trigger local pause
+    try {
+      player?.pauseVideo?.();
+    } catch {}
+
+    const fallbackPos = playerState.positionSec || 0;
+    const pos = await getFastCurrentTime(fallbackPos);
+
+    setPlayerState({
+      ...playerState,
+      status: 'paused',
+      positionSec: pos,
+    });
+
+    if (socket) {
+      socket.emit('player:pause', { positionSec: pos });
+    }
+  }, [socket, playerRef, playerState, setPlayerState, getFastCurrentTime]);
 
   const emitSeek = useCallback(
     (positionSec) => {
-      if (!socket || isApplyingRemoteChange.current) return;
-      socket.emit('player:seek', { positionSec });
+      isApplyingRemoteChange.current = false;
+      const player = playerRef.current;
+      try {
+        player?.seekTo?.(positionSec, true);
+      } catch {}
+
+      setPlayerState({
+        ...playerState,
+        positionSec,
+      });
+
+      if (socket) {
+        socket.emit('player:seek', { positionSec });
+      }
     },
-    [socket]
+    [socket, playerRef, playerState, setPlayerState]
   );
 
   const emitSetVideo = useCallback(

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useRoomContext, useTracks } from '@livekit/components-react';
 import { Track } from 'livekit-client';
-import { Film, Radio, StopCircle, Maximize2, Minimize2, Users, Smile, Play } from 'lucide-react';
+import { Film, Radio, StopCircle, Maximize2, Minimize2, Users, Smile, Play, Subtitles } from 'lucide-react';
 import { PlayerControls } from '../player/PlayerControls';
 import { FullscreenSlideWindow } from '../player/FullscreenSlideWindow';
 import { useAppStore } from '../../stores/useAppStore';
@@ -51,6 +51,7 @@ export function SharedMediaPlayer({
   const [isMobileFullscreen, setIsMobileFullscreen] = useState(false);
   const [isSlideWindowOpen, setIsSlideWindowOpen] = useState(false);
   const [isControlsVisible, setIsControlsVisible] = useState(true);
+  const [isCaptionsEnabled, setIsCaptionsEnabled] = useState(true);
   const controlsTimerRef = useRef(null);
 
   // LiveKit ScreenShare & Camera tracks for viewers (with onlySubscribed: false so new publications are never hidden)
@@ -505,6 +506,42 @@ export function SharedMediaPlayer({
     } catch {}
   }, []);
 
+  const handleToggleCaptions = useCallback(() => {
+    const next = !isCaptionsEnabled;
+    setIsCaptionsEnabled(next);
+    const video = isSharer ? videoRef.current : remoteVideoRef.current;
+    if (video && video.textTracks) {
+      for (let i = 0; i < video.textTracks.length; i++) {
+        video.textTracks[i].mode = next ? 'showing' : 'hidden';
+      }
+    }
+  }, [isCaptionsEnabled, isSharer]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && isMobileFullscreen) {
+        setIsMobileFullscreen(false);
+      }
+    };
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isMobileFullscreen) {
+        handleExitFullscreen();
+      }
+      if ((e.key === 'c' || e.key === 'C') && !['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) {
+        handleToggleCaptions();
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMobileFullscreen, handleExitFullscreen, handleToggleCaptions]);
+
   useEffect(() => {
     return () => {
       if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
@@ -519,7 +556,7 @@ export function SharedMediaPlayer({
       ref={containerRef}
       className={
         isMobileFullscreen
-          ? 'fixed inset-0 z-50 bg-[#0B0B10] flex flex-col justify-between select-none overflow-hidden h-[100dvh] w-screen'
+          ? 'fixed inset-0 z-50 bg-black flex flex-col justify-between select-none overflow-hidden h-[100dvh] w-screen'
           : 'relative w-full flex flex-col bg-[#0B0B10] select-none rounded-2xl overflow-hidden border border-white/10 shadow-2xl'
       }
     >
@@ -553,6 +590,27 @@ export function SharedMediaPlayer({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {/* Captions Toggle Button */}
+          {isMobileFullscreen && (
+            <button
+              type="button"
+              onClick={() => {
+                handleToggleCaptions();
+                resetControlsTimer();
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold backdrop-blur-md transition-all active:scale-95 cursor-pointer ${
+                isCaptionsEnabled
+                  ? 'bg-[#FF9F1C]/20 border-[#FF9F1C]/50 text-[#FF9F1C]'
+                  : 'bg-black/70 border-white/20 text-white/80 hover:bg-black/90 hover:text-white'
+              }`}
+              aria-label={isCaptionsEnabled ? 'Turn off captions' : 'Turn on captions'}
+              title="Captions (c)"
+            >
+              <Subtitles className="w-3.5 h-3.5" />
+              <span className="text-[11px] font-bold">CC</span>
+            </button>
+          )}
+
           {/* Lounge Toggle Button in Fullscreen */}
           {isMobileFullscreen && (
             <button
@@ -606,12 +664,12 @@ export function SharedMediaPlayer({
         </div>
       </div>
 
-      {/* Main Video Frame */}
+      {/* Main Video Frame (Edge-to-edge on fullscreen without borders) */}
       <div
         onClick={handleVideoAreaTap}
         className={
           isMobileFullscreen
-            ? 'relative w-full flex-1 bg-[#0B0B10] overflow-hidden flex items-center justify-center p-2 sm:p-4 min-h-0 cursor-pointer'
+            ? 'relative w-full flex-1 bg-black overflow-hidden flex items-center justify-center p-0 min-h-0 cursor-pointer'
             : 'relative w-full aspect-video bg-[#0B0B10] overflow-hidden flex items-center justify-center'
         }
       >
@@ -620,7 +678,7 @@ export function SharedMediaPlayer({
           <div
             className={
               isMobileFullscreen
-                ? 'relative w-full max-w-4xl max-h-[76vh] aspect-video rounded-2xl overflow-hidden shadow-2xl bg-black border border-white/10 flex items-center justify-center'
+                ? 'relative w-full h-full flex items-center justify-center bg-black overflow-hidden'
                 : 'w-full h-full flex items-center justify-center'
             }
           >
@@ -636,7 +694,7 @@ export function SharedMediaPlayer({
           <div
             className={
               isMobileFullscreen
-                ? 'relative w-full max-w-4xl max-h-[76vh] aspect-video rounded-2xl overflow-hidden shadow-2xl bg-black border border-white/10 flex items-center justify-center'
+                ? 'relative w-full h-full flex items-center justify-center bg-black overflow-hidden'
                 : 'w-full h-full flex items-center justify-center'
             }
           >
@@ -743,6 +801,8 @@ export function SharedMediaPlayer({
           onToggleMute={handleToggleMute}
           isFullscreen={isMobileFullscreen}
           onToggleFullscreen={isMobileFullscreen ? handleExitFullscreen : handleEnterFullscreen}
+          isCaptionsEnabled={isCaptionsEnabled}
+          onToggleCaptions={handleToggleCaptions}
           onUserInteraction={resetControlsTimer}
           className={isMobileFullscreen ? 'bg-black/85 backdrop-blur-xl border-t border-white/10' : ''}
         />

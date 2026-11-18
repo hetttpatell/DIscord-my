@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize2, Minimize2 } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize2, Minimize2, Subtitles } from 'lucide-react';
 import { Slider } from '../../components/Slider';
 import { Button } from '../../components/Button';
 import { cn } from '../../lib/utils';
@@ -29,6 +29,8 @@ export function PlayerControls({
   onToggleMute,
   isFullscreen = false,
   onToggleFullscreen,
+  isCaptionsEnabled = false,
+  onToggleCaptions,
   className = '',
   onUserInteraction,
 }) {
@@ -71,15 +73,18 @@ export function PlayerControls({
           <Button
             variant="ghost"
             size="icon"
-            onClick={onPlayPause}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlayPause?.();
+            }}
             aria-label={isPlaying ? 'Pause video' : 'Play video'}
-            className="text-[#FF9F1C] hover:bg-white/10"
+            className="text-[#FF9F1C] hover:bg-white/10 active:scale-95 transition-transform"
           >
             {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
           </Button>
         </div>
 
-        {/* Volume controls & Fullscreen toggle */}
+        {/* Volume controls, Captions & Fullscreen toggle */}
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 max-w-[150px] w-full">
             <Button
@@ -105,6 +110,28 @@ export function PlayerControls({
               className="w-16 sm:w-20"
             />
           </div>
+
+          {onToggleCaptions && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleCaptions();
+              }}
+              aria-label={isCaptionsEnabled ? 'Turn captions off' : 'Turn captions on'}
+              title={isCaptionsEnabled ? 'Captions (c) - On' : 'Captions (c) - Off'}
+              className={cn(
+                'relative text-[#9A978F] hover:text-[#F4F1EA] shrink-0 transition-colors',
+                isCaptionsEnabled && 'text-[#FF9F1C] hover:text-[#ffb042]'
+              )}
+            >
+              <Subtitles className="w-4 h-4" />
+              {isCaptionsEnabled && (
+                <span className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-3.5 h-0.5 bg-[#FF9F1C] rounded-full" />
+              )}
+            </Button>
+          )}
 
           {onToggleFullscreen && (
             <Button

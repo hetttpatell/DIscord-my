@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import YouTube from 'react-youtube';
-import { Play, Music, Maximize2, Minimize2, Users, Smile, Film } from 'lucide-react';
+import { Play, Music, Maximize2, Minimize2, Users, Smile, Film, Subtitles } from 'lucide-react';
 import { PlayerControls } from './PlayerControls';
 import { FullscreenSlideWindow } from './FullscreenSlideWindow';
 import { useYouTubeSync } from './useYouTubeSync';
@@ -19,6 +19,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
   const [isMobileFullscreen, setIsMobileFullscreen] = useState(false);
   const [isSlideWindowOpen, setIsSlideWindowOpen] = useState(false);
   const [isControlsVisible, setIsControlsVisible] = useState(true);
+  const [isCaptionsEnabled, setIsCaptionsEnabled] = useState(false);
   const controlsTimerRef = useRef(null);
 
   const {
@@ -100,6 +101,43 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
     } catch {}
   };
 
+  const handleToggleCaptions = useCallback(async () => {
+    const player = playerRef.current;
+    const next = !isCaptionsEnabled;
+    setIsCaptionsEnabled(next);
+
+    if (!player) return;
+
+    try {
+      if (next) {
+        if (typeof player.loadModule === 'function') {
+          player.loadModule('captions');
+        }
+        if (typeof player.setOption === 'function') {
+          let track = {};
+          try {
+            const trackList =
+              typeof player.getOption === 'function' ? player.getOption('captions', 'tracklist') : [];
+            if (Array.isArray(trackList) && trackList.length > 0) {
+              track = trackList[0];
+            }
+          } catch {}
+          player.setOption('captions', 'track', track);
+          player.setOption('captions', 'reload', true);
+        }
+      } else {
+        if (typeof player.setOption === 'function') {
+          player.setOption('captions', 'track', {});
+        }
+        if (typeof player.unloadModule === 'function') {
+          player.unloadModule('captions');
+        }
+      }
+    } catch (err) {
+      console.warn('[YouTube Player] Error toggling captions:', err);
+    }
+  }, [isCaptionsEnabled]);
+
   const handleEnterFullscreen = useCallback(() => {
     setIsMobileFullscreen(true);
     setIsSlideWindowOpen(true);
@@ -144,6 +182,9 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
       if (e.key === 'Escape' && isMobileFullscreen) {
         handleExitFullscreen();
       }
+      if ((e.key === 'c' || e.key === 'C') && !['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) {
+        handleToggleCaptions();
+      }
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -153,7 +194,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isMobileFullscreen, handleExitFullscreen]);
+  }, [isMobileFullscreen, handleExitFullscreen, handleToggleCaptions]);
 
   useEffect(() => {
     if (isMobileFullscreen) {
@@ -280,6 +321,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
       playsinline: 1,
       rel: 0,
       iv_load_policy: 3,
+      cc_load_policy: 0,
     },
   };
 
@@ -288,7 +330,7 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
       ref={containerRef}
       className={
         isMobileFullscreen
-          ? 'fixed inset-0 z-50 bg-[#0B0B10] flex flex-col justify-between select-none overflow-hidden h-[100dvh] w-screen'
+          ? 'fixed inset-0 z-50 bg-black flex flex-col justify-between select-none overflow-hidden h-[100dvh] w-screen'
           : 'relative w-full flex flex-col bg-[#0B0B10] select-none rounded-2xl overflow-hidden border border-white/10 shadow-2xl'
       }
     >
@@ -315,6 +357,25 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
 
           {/* Action Buttons (Right) */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Captions Toggle Button */}
+            <button
+              type="button"
+              onClick={() => {
+                handleToggleCaptions();
+                resetControlsTimer();
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold backdrop-blur-md transition-all active:scale-95 cursor-pointer ${
+                isCaptionsEnabled
+                  ? 'bg-[#FF9F1C]/20 border-[#FF9F1C]/50 text-[#FF9F1C]'
+                  : 'bg-black/70 border-white/20 text-white/80 hover:bg-black/90 hover:text-white'
+              }`}
+              aria-label={isCaptionsEnabled ? 'Turn off captions' : 'Turn on captions'}
+              title="Captions (c)"
+            >
+              <Subtitles className="w-3.5 h-3.5" />
+              <span className="text-[11px] font-bold">CC</span>
+            </button>
+
             {/* Slide Window Toggle Button */}
             <button
               type="button"
@@ -353,12 +414,12 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
         </div>
       )}
 
-      {/* Video Container (Aspect 16:9 on normal, centered without overfilling in fullscreen) */}
+      {/* Video Container (Aspect 16:9 on normal, full edge-to-edge on fullscreen without borders) */}
       <div
         onClick={handleVideoAreaTap}
         className={
           isMobileFullscreen
-            ? 'relative w-full flex-1 bg-[#0B0B10] overflow-hidden flex items-center justify-center p-2 sm:p-4 min-h-0 cursor-pointer'
+            ? 'relative w-full flex-1 bg-black overflow-hidden flex items-center justify-center p-0 min-h-0 cursor-pointer'
             : 'relative w-full aspect-video bg-[#0B0B10] overflow-hidden flex items-center justify-center'
         }
       >
@@ -366,19 +427,21 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
           <div
             className={
               isMobileFullscreen
-                ? 'relative w-full max-w-4xl max-h-[76vh] aspect-video pointer-events-none rounded-2xl overflow-hidden shadow-2xl bg-black border border-white/10'
+                ? 'relative w-full h-full flex items-center justify-center bg-black overflow-hidden pointer-events-none'
                 : 'absolute inset-0 w-full h-full pointer-events-none'
             }
           >
-            <YouTube
-              videoId={playerState.videoId}
-              opts={youtubeOpts}
-              onReady={onReady}
-              onStateChange={onStateChange}
-              onError={onError}
-              className="w-full h-full"
-              iframeClassName="w-full h-full border-none"
-            />
+            <div className={isMobileFullscreen ? 'w-full h-full max-w-full max-h-full aspect-video flex items-center justify-center' : 'w-full h-full'}>
+              <YouTube
+                videoId={playerState.videoId}
+                opts={youtubeOpts}
+                onReady={onReady}
+                onStateChange={onStateChange}
+                onError={onError}
+                className="w-full h-full"
+                iframeClassName="w-full h-full border-none pointer-events-none"
+              />
+            </div>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center gap-3 p-6 text-center">
@@ -493,6 +556,8 @@ export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onL
           onToggleMute={handleToggleMute}
           isFullscreen={isMobileFullscreen}
           onToggleFullscreen={isMobileFullscreen ? handleExitFullscreen : handleEnterFullscreen}
+          isCaptionsEnabled={isCaptionsEnabled}
+          onToggleCaptions={handleToggleCaptions}
           onUserInteraction={resetControlsTimer}
           className={isMobileFullscreen ? 'bg-black/85 backdrop-blur-xl border-t border-white/10' : ''}
         />

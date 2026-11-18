@@ -8,6 +8,7 @@ import {
   ChevronUp,
   ChevronDown,
   Share2,
+  PartyPopper,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -22,6 +23,7 @@ export function RoomDock({
   onOpenSearch,
   onOpenQueue,
   onToggleMembers,
+  onOpenSetWelcome,
   queueCount = 0,
   membersCount = 1,
   isGameActive = false,
@@ -267,6 +269,24 @@ export function RoomDock({
               <span className="text-xs font-semibold text-white tracking-tight">Share Invite</span>
               <span className="text-[10px] text-white/50">Copy Link</span>
             </button>
+
+            {/* 7. Welcome Announcement */}
+            {onOpenSetWelcome && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsExpanded(false);
+                  onOpenSetWelcome?.();
+                }}
+                className="flex flex-col items-center justify-center p-3 rounded-[22px] bg-white/[0.06] hover:bg-white/[0.12] active:scale-95 transition-all duration-150 border border-white/[0.06] text-center group cursor-pointer"
+              >
+                <div className="w-11 h-11 rounded-[16px] bg-[#FF9F1C]/15 border border-[#FF9F1C]/30 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform shadow-md shadow-[#FF9F1C]/10">
+                  <PartyPopper className="w-5 h-5 text-[#FF9F1C]" />
+                </div>
+                <span className="text-xs font-semibold text-white tracking-tight">Announcement</span>
+                <span className="text-[10px] text-white/50">Party Welcome</span>
+              </button>
+            )}
           </div>
         </div>
       )}

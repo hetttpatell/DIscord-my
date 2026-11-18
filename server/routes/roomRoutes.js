@@ -36,6 +36,12 @@ export const roomAuthSchema = z.object({
     .trim()
     .min(1, 'Display name must be 1-24 characters')
     .max(24, 'Display name must be 1-24 characters'),
+  welcomeMessage: z
+    .string()
+    .trim()
+    .max(140, 'Welcome message must be at most 140 characters')
+    .optional()
+    .nullable(),
 });
 
 // POST /api/rooms (Create room)
@@ -49,7 +55,7 @@ router.post('/rooms', roomAuthRateLimiter, async (req, res, next) => {
       });
     }
 
-    const { roomId, password, displayName } = parseResult.data;
+    const { roomId, password, displayName, welcomeMessage } = parseResult.data;
     const existing = await roomStore.getRoom(roomId);
     if (existing) {
       return res.status(409).json({ error: 'Room ID already taken. Please choose another or join it.' });
@@ -63,6 +69,7 @@ router.post('/rooms', roomAuthRateLimiter, async (req, res, next) => {
       passwordHash,
       creatorDisplayName: displayName,
       creatorMemberId: memberId,
+      welcomeMessage: welcomeMessage || null,
     });
 
     const token = signSessionToken({
@@ -76,6 +83,7 @@ router.post('/rooms', roomAuthRateLimiter, async (req, res, next) => {
       roomId,
       memberId,
       displayName,
+      welcomeMessage: welcomeMessage || null,
     });
   } catch (err) {
     next(err);

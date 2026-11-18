@@ -77,6 +77,9 @@ export class RoomStore {
           usedWords: [],
         };
       }
+      if (room.welcomeMessage === undefined) {
+        room.welcomeMessage = null;
+      }
     }
     return room;
   }
@@ -96,7 +99,7 @@ export class RoomStore {
     return room;
   }
 
-  async createRoom({ roomId, passwordHash, creatorDisplayName, creatorMemberId }) {
+  async createRoom({ roomId, passwordHash, creatorDisplayName, creatorMemberId, welcomeMessage = null }) {
     const existing = await this.getRoom(roomId);
     if (existing) {
       const err = new Error('Room already exists');
@@ -107,6 +110,9 @@ export class RoomStore {
     const room = {
       roomId,
       passwordHash,
+      creatorDisplayName: creatorDisplayName || 'Host',
+      creatorMemberId,
+      welcomeMessage: typeof welcomeMessage === 'string' && welcomeMessage.trim() ? welcomeMessage.trim().slice(0, 140) : null,
       createdAt: Date.now(),
       lastActiveAt: Date.now(),
       members: {},

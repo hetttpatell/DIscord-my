@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Eye, EyeOff, Radio, Plus, LogIn, ArrowRight } from 'lucide-react';
+import { Eye, EyeOff, Radio, Plus, LogIn, ArrowRight, PartyPopper } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -17,6 +17,7 @@ export default function LobbyPage() {
   const [tab, setTab] = useState('create'); // 'create' | 'join'
   const [roomId, setRoomId] = useState('');
   const [password, setPassword] = useState('');
+  const [welcomeMessage, setWelcomeMessage] = useState('');
   const [displayName, setDisplayName] = useState(
     () => (typeof window !== 'undefined' ? localStorage.getItem('afterspot_displayName') || '' : '')
   );
@@ -60,6 +61,7 @@ export default function LobbyPage() {
       roomId: roomId.trim(),
       password,
       displayName: displayName.trim(),
+      ...(tab === 'create' && welcomeMessage.trim() ? { welcomeMessage: welcomeMessage.trim() } : {}),
     };
 
     try {
@@ -74,6 +76,10 @@ export default function LobbyPage() {
         memberId: data.memberId,
         displayName: data.displayName,
       });
+
+      if (data.welcomeMessage) {
+        useAppStore.getState().setWelcomeMessage(data.welcomeMessage, data.displayName);
+      }
 
       toast.success(tab === 'create' ? 'Room created!' : 'Joined room!');
       navigate(`/room/${encodeURIComponent(data.roomId)}`);
@@ -265,6 +271,35 @@ export default function LobbyPage() {
                 )}
               </AnimatePresence>
             </div>
+
+            {/* Optional Welcome Announcement for Create Room */}
+            {tab === 'create' && (
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label
+                    htmlFor="welcomeMessage"
+                    className="flex items-center gap-1.5 text-xs font-medium text-[#9A978F]"
+                  >
+                    <PartyPopper className="w-3.5 h-3.5 text-[#FF9F1C]" />
+                    <span>Welcome Announcement</span>
+                  </label>
+                  <span className="text-[10px] text-white/40 font-mono">Optional</span>
+                </div>
+                <Input
+                  id="welcomeMessage"
+                  type="text"
+                  placeholder="e.g. Welcome to Het's Party! Grab your drinks 🍿"
+                  value={welcomeMessage}
+                  onChange={(e) => setWelcomeMessage(e.target.value)}
+                  disabled={isLoading}
+                  maxLength={140}
+                  className="text-xs"
+                />
+                <p className="text-[10px] text-white/40 mt-1">
+                  Shown in big, bold letters with party poppers to every friend who joins!
+                </p>
+              </div>
+            )}
 
             {/* Submit Button */}
             <div className="pt-2">

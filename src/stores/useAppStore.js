@@ -26,6 +26,8 @@ export const useAppStore = create((set) => ({
   queueVersion: 0,
   serverOffsetMs: 0,
   isFullscreen: false,
+  welcomeMessage: null,
+  welcomeCreator: '',
   setSession: ({ token, roomId, memberId, displayName }) => {
     if (typeof window !== 'undefined') {
       if (token) localStorage.setItem('afterspot_token', token);
@@ -46,6 +48,8 @@ export const useAppStore = create((set) => ({
       nowPlaying: null,
       queueVersion: 0,
       isFullscreen: false,
+      welcomeMessage: null,
+      welcomeCreator: '',
       mediaState: {
         type: 'youtube',
         sharerId: null,
@@ -80,6 +84,8 @@ export const useAppStore = create((set) => ({
       nowPlaying: null,
       queueVersion: 0,
       isFullscreen: false,
+      welcomeMessage: null,
+      welcomeCreator: '',
       mediaState: {
         type: 'youtube',
         sharerId: null,
@@ -122,5 +128,7 @@ export const useAppStore = create((set) => ({
     }),
   setServerOffsetMs: (offset) => set({ serverOffsetMs: offset }),
   setIsFullscreen: (isFullscreen) => set({ isFullscreen: Boolean(isFullscreen) }),
+  setWelcomeMessage: (welcomeMessage, welcomeCreator = '') =>
+    set({ welcomeMessage: welcomeMessage || null, welcomeCreator: welcomeCreator || '' }),
 }));
 

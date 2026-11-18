@@ -17,6 +17,8 @@ import { ScribbleArena } from '../features/games/ScribbleArena';
 import { FloatingReactions } from '../features/reactions/FloatingReactions';
 import { ReactionPicker } from '../features/reactions/ReactionPicker';
 import { CameraStrip } from '../features/video/CameraStrip';
+import { WelcomeCelebrationModal } from '../features/room/WelcomeCelebrationModal';
+import { SetWelcomeMessageModal } from '../features/room/SetWelcomeMessageModal';
 import { Gamepad2 } from 'lucide-react';
 import { Sheet } from '../components/Sheet';
 import { stopMicrophone } from '../lib/microphone';
@@ -48,6 +50,8 @@ export default function RoomPage() {
   const [activeGameInfo, setActiveGameInfo] = useState(null);
   const [isLocalMediaModalOpen, setIsLocalMediaModalOpen] = useState(false);
   const [localMediaFile, setLocalMediaFile] = useState(null);
+  const [celebrationMessage, setCelebrationMessage] = useState(null);
+  const [isSetWelcomeOpen, setIsSetWelcomeOpen] = useState(false);
 
   // Validate session on mount
   useEffect(() => {
@@ -159,6 +163,19 @@ export default function RoomPage() {
       setActiveGameInfo(null);
     };
 
+    const handleWelcomeMessage = (data) => {
+      if (data?.message) {
+        useAppStore.getState().setWelcomeMessage(data.message, data.creatorDisplayName);
+        const seenKey = `welcome_seen_${roomId}_${data.message}`;
+        if (typeof window !== 'undefined' && !sessionStorage.getItem(seenKey)) {
+          setCelebrationMessage({
+            message: data.message,
+            creatorDisplayName: data.creatorDisplayName || 'Host',
+          });
+        }
+      }
+    };
+
     socket.on('room:members', handleMembers);
     socket.on('voice:state', handleVoiceState);
     socket.on('camera:state', handleCameraState);
@@ -168,6 +185,7 @@ export default function RoomPage() {
     socket.on('game:started', handleGameStarted);
     socket.on('game:state', handleGameState);
     socket.on('game:match_end', handleMatchEnd);
+    socket.on('room:welcome_message', handleWelcomeMessage);
 
     if (!socket.connected && !socket.connecting) {
       socket.connect();
@@ -183,8 +201,9 @@ export default function RoomPage() {
       socket.off('game:started', handleGameStarted);
       socket.off('game:state', handleGameState);
       socket.off('game:match_end', handleMatchEnd);
+      socket.off('room:welcome_message', handleWelcomeMessage);
     };
-  }, [socket, setMediaState]);
+  }, [socket, setMediaState, roomId]);
 
   const handleLeave = () => {
     disconnectSocket();
@@ -412,10 +431,29 @@ export default function RoomPage() {
           onOpenSearch={() => setIsSearchOpen(true)}
           onOpenQueue={() => setIsQueueOpen(true)}
           onToggleMembers={() => setIsMembersOpen((prev) => !prev)}
+          onOpenSetWelcome={() => setIsSetWelcomeOpen(true)}
           queueCount={totalQueueCount}
           membersCount={Array.isArray(members) ? members.length : 1}
           isGameActive={Boolean(activeGameInfo)}
           isHidden={isGamesOpen}
+        />
+
+        {/* Full-Screen Welcome Announcement Celebration with Party Poppers */}
+        {celebrationMessage && (
+          <WelcomeCelebrationModal
+            message={celebrationMessage.message}
+            creatorDisplayName={celebrationMessage.creatorDisplayName}
+            roomId={roomId}
+            onClose={() => setCelebrationMessage(null)}
+          />
+        )}
+
+        {/* Host Set/Edit Welcome Announcement Modal */}
+        <SetWelcomeMessageModal
+          isOpen={isSetWelcomeOpen}
+          onClose={() => setIsSetWelcomeOpen(false)}
+          socket={socket}
+          currentMessage={useAppStore.getState().welcomeMessage || ''}
         />
       </div>
     </LiveKitVoiceProvider>

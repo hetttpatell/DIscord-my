@@ -470,6 +470,14 @@ export function setupSocketIO(io) {
       // Send game state snapshot to connecting socket
       socket.emit('game:state', sanitizeGameStateForMember(room.gameState, memberId));
 
+      // Send welcome announcement snapshot to connecting socket
+      if (room.welcomeMessage) {
+        socket.emit('room:welcome_message', {
+          message: room.welcomeMessage,
+          creatorDisplayName: room.creatorDisplayName || 'Host',
+        });
+      }
+
       // Broadcast updated member list to all room participants
       io.to(roomId).emit(
         'room:members',
@@ -491,6 +499,36 @@ export function setupSocketIO(io) {
         clientTime: parsed.data.clientTime,
         serverTime: Date.now(),
       });
+    });
+
+    // Update or clear room welcome announcement message
+    socket.on('room:set_welcome_message', async ({ message }, ack) => {
+      try {
+        const currentRoom = await roomStore.getRoom(roomId);
+        if (!currentRoom) return;
+
+        const cleanMessage =
+          typeof message === 'string' && message.trim()
+            ? message.trim().slice(0, 140)
+            : null;
+
+        currentRoom.welcomeMessage = cleanMessage;
+        await roomStore.saveRoom(currentRoom);
+
+        io.to(roomId).emit('room:welcome_message', {
+          message: currentRoom.welcomeMessage,
+          creatorDisplayName: currentRoom.creatorDisplayName || displayName,
+        });
+
+        if (typeof ack === 'function') {
+          ack({ ok: true, welcomeMessage: currentRoom.welcomeMessage });
+        }
+      } catch (err) {
+        console.warn('[socket] set_welcome_message error:', err);
+        if (typeof ack === 'function') {
+          ack({ ok: false, error: err.message });
+        }
+      }
     });
 
     // player:set-video

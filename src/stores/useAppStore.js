@@ -12,6 +12,15 @@ export const useAppStore = create((set) => ({
     positionSec: 0,
     serverUpdatedAtMs: 0,
   },
+  mediaState: {
+    type: 'youtube',
+    sharerId: null,
+    sharerName: null,
+    fileName: null,
+    durationSec: 0,
+    positionSec: 0,
+    status: 'paused',
+  },
   queue: [],
   nowPlaying: null,
   queueVersion: 0,
@@ -35,6 +44,15 @@ export const useAppStore = create((set) => ({
       queue: [],
       nowPlaying: null,
       queueVersion: 0,
+      mediaState: {
+        type: 'youtube',
+        sharerId: null,
+        sharerName: null,
+        fileName: null,
+        durationSec: 0,
+        positionSec: 0,
+        status: 'paused',
+      },
     });
   },
   clearSession: () => {
@@ -59,8 +77,21 @@ export const useAppStore = create((set) => ({
       queue: [],
       nowPlaying: null,
       queueVersion: 0,
+      mediaState: {
+        type: 'youtube',
+        sharerId: null,
+        sharerName: null,
+        fileName: null,
+        durationSec: 0,
+        positionSec: 0,
+        status: 'paused',
+      },
     });
   },
+  setMediaState: (mediaState) =>
+    set((prev) => ({
+      mediaState: { ...(prev.mediaState || {}), ...mediaState },
+    })),
   setMembers: (members) => {
     let list = [];
     if (Array.isArray(members)) {

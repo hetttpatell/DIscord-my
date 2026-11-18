@@ -48,6 +48,16 @@ const reactionSchema = z.object({
   emoji: z.string().trim().min(1).max(16),
 });
 
+const mediaStartSchema = z.object({
+  fileName: z.string().trim().min(1).max(255),
+  durationSec: z.number().min(0).optional(),
+});
+
+const mediaControlSchema = z.object({
+  action: z.enum(['play', 'pause', 'seek']),
+  positionSec: z.number().min(0).optional(),
+});
+
 // Per-socket rate limiter: max 30 events per 5 seconds
 function createSocketRateLimiter(maxEvents = 30, windowMs = 5000) {
   const eventTimestamps = [];
@@ -105,6 +115,9 @@ export function setupSocketIO(io) {
         nowPlaying: room.nowPlaying || null,
         version: room.queueVersion || 1,
       });
+
+      // Send media state snapshot to connecting socket
+      socket.emit('media:state', room.mediaState || { type: 'youtube' });
 
       // Broadcast updated member list to all room participants
       io.to(roomId).emit(
@@ -167,6 +180,19 @@ export function setupSocketIO(io) {
       }
 
       if (updated) {
+        if (currentRoom?.mediaState?.type === 'local') {
+          currentRoom.mediaState = {
+            type: 'youtube',
+            sharerId: null,
+            sharerName: null,
+            fileName: null,
+            durationSec: 0,
+            positionSec: 0,
+            status: 'paused',
+          };
+          await roomStore.saveRoom(currentRoom);
+          io.to(roomId).emit('media:state', currentRoom.mediaState);
+        }
         io.to(roomId).emit('player:state', updated);
       }
     });
@@ -260,6 +286,19 @@ export function setupSocketIO(io) {
       });
 
       if (updated) {
+        if (currentRoom?.mediaState?.type === 'local') {
+          currentRoom.mediaState = {
+            type: 'youtube',
+            sharerId: null,
+            sharerName: null,
+            fileName: null,
+            durationSec: 0,
+            positionSec: 0,
+            status: 'paused',
+          };
+          await roomStore.saveRoom(currentRoom);
+          io.to(roomId).emit('media:state', currentRoom.mediaState);
+        }
         io.to(roomId).emit('player:state', updated);
       }
     });
@@ -276,6 +315,19 @@ export function setupSocketIO(io) {
       });
 
       if (updated) {
+        if (currentRoom?.mediaState?.type === 'local') {
+          currentRoom.mediaState = {
+            type: 'youtube',
+            sharerId: null,
+            sharerName: null,
+            fileName: null,
+            durationSec: 0,
+            positionSec: 0,
+            status: 'paused',
+          };
+          await roomStore.saveRoom(currentRoom);
+          io.to(roomId).emit('media:state', currentRoom.mediaState);
+        }
         io.to(roomId).emit('player:state', updated);
       }
     });
@@ -293,6 +345,19 @@ export function setupSocketIO(io) {
       });
 
       if (updated) {
+        if (currentRoom?.mediaState?.type === 'local') {
+          currentRoom.mediaState = {
+            type: 'youtube',
+            sharerId: null,
+            sharerName: null,
+            fileName: null,
+            durationSec: 0,
+            positionSec: 0,
+            status: 'paused',
+          };
+          await roomStore.saveRoom(currentRoom);
+          io.to(roomId).emit('media:state', currentRoom.mediaState);
+        }
         io.to(roomId).emit('player:state', updated);
       }
     });
@@ -325,10 +390,83 @@ export function setupSocketIO(io) {
       });
     });
 
+    // media:start
+    socket.on('media:start', async (payload) => {
+      if (!isAllowed()) return;
+      const parsed = mediaStartSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      const room = await roomStore.getRoom(roomId);
+      if (!room) return;
+
+      room.mediaState = {
+        type: 'local',
+        sharerId: memberId,
+        sharerName: displayName,
+        fileName: parsed.data.fileName,
+        durationSec: parsed.data.durationSec || 0,
+        positionSec: 0,
+        status: 'playing',
+      };
+
+      if (room.playerState) {
+        room.playerState.status = 'paused';
+      }
+
+      await roomStore.saveRoom(room);
+      io.to(roomId).emit('media:state', room.mediaState);
+      io.to(roomId).emit('player:state', room.playerState);
+    });
+
+    // media:stop
+    socket.on('media:stop', async () => {
+      if (!isAllowed()) return;
+      const room = await roomStore.getRoom(roomId);
+      if (!room) return;
+
+      room.mediaState = {
+        type: 'youtube',
+        sharerId: null,
+        sharerName: null,
+        fileName: null,
+        durationSec: 0,
+        positionSec: 0,
+        status: 'paused',
+      };
+
+      await roomStore.saveRoom(room);
+      io.to(roomId).emit('media:state', room.mediaState);
+    });
+
+    // media:control
+    socket.on('media:control', async (payload) => {
+      if (!isAllowed()) return;
+      const parsed = mediaControlSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      const room = await roomStore.getRoom(roomId);
+      if (!room || room.mediaState?.type !== 'local') return;
+
+      if (parsed.data.action === 'play') room.mediaState.status = 'playing';
+      if (parsed.data.action === 'pause') room.mediaState.status = 'paused';
+      if (parsed.data.positionSec !== undefined) room.mediaState.positionSec = parsed.data.positionSec;
+
+      await roomStore.saveRoom(room);
+      io.to(roomId).emit('media:state', room.mediaState);
+      io.to(roomId).emit('media:control', {
+        action: parsed.data.action,
+        positionSec: parsed.data.positionSec,
+        byMemberId: memberId,
+      });
+    });
+
     // Handle disconnection
     socket.on('disconnect', async () => {
       const result = await roomStore.removeMemberBySocket(socket.id);
       if (result?.room) {
+        if (result.sharerLeft) {
+          io.to(result.room.roomId).emit('media:state', result.room.mediaState);
+        }
         io.to(result.room.roomId).emit(
           'room:members',
           Object.values(result.room.members || {}).map((m) => ({

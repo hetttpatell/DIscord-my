@@ -50,6 +50,17 @@ export class RoomStore {
       if (!Array.isArray(room.queue)) room.queue = [];
       if (room.nowPlaying === undefined) room.nowPlaying = null;
       if (!room.queueVersion) room.queueVersion = 1;
+      if (!room.mediaState) {
+        room.mediaState = {
+          type: 'youtube',
+          sharerId: null,
+          sharerName: null,
+          fileName: null,
+          durationSec: 0,
+          positionSec: 0,
+          status: 'paused',
+        };
+      }
     }
     return room;
   }
@@ -88,6 +99,15 @@ export class RoomStore {
         status: 'paused',
         positionSec: 0,
         serverUpdatedAtMs: Date.now(),
+      },
+      mediaState: {
+        type: 'youtube',
+        sharerId: null,
+        sharerName: null,
+        fileName: null,
+        durationSec: 0,
+        positionSec: 0,
+        status: 'paused',
       },
       queue: [],
       nowPlaying: null,
@@ -149,11 +169,37 @@ export class RoomStore {
       }
 
       if (changed) {
+        let sharerLeft = false;
+        if (room.mediaState?.type === 'local' && room.mediaState?.sharerId === leftMember?.memberId) {
+          room.mediaState = {
+            type: 'youtube',
+            sharerId: null,
+            sharerName: null,
+            fileName: null,
+            durationSec: 0,
+            positionSec: 0,
+            status: 'paused',
+          };
+          sharerLeft = true;
+        }
         await this.saveRoom(room);
-        return { room, leftMember };
+        return { room, leftMember, sharerLeft };
       }
     }
     return null;
+  }
+
+  async updateMediaState(roomId, newState) {
+    const room = await this.getRoom(roomId);
+    if (!room) return null;
+
+    room.mediaState = {
+      ...(room.mediaState || {}),
+      ...newState,
+    };
+
+    await this.saveRoom(room);
+    return room.mediaState;
   }
 
   async updatePlayerState(roomId, newState) {

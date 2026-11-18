@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useDebounce } from 'use-debounce';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Search, X, Loader2, Music2, AlertCircle, Clock, ListPlus } from 'lucide-react';
+import { Search, X, Loader2, Music2, AlertCircle, Clock, ListPlus, Film } from 'lucide-react';
 import { Drawer } from 'vaul';
 import { apiRequest } from '../../lib/api';
 import { cn } from '../../lib/utils';
@@ -16,7 +16,7 @@ function formatDuration(sec) {
   return `${m}:${rem.toString().padStart(2, '0')}`;
 }
 
-export function YouTubeSearchSheet({ open, onOpenChange, socket: propSocket }) {
+export function YouTubeSearchSheet({ open, onOpenChange, socket: propSocket, onOpenLocalMediaModal }) {
   const socket = propSocket || (typeof window !== 'undefined' ? window.__socket : null);
   const token = useAppStore((s) => s.token);
   const [searchTerm, setSearchTerm] = useState('');
@@ -176,12 +176,25 @@ export function YouTubeSearchSheet({ open, onOpenChange, socket: propSocket }) {
 
             {/* Empty Initial State */}
             {!isLoading && !isError && debouncedQuery.trim() === '' && (
-              <div className="py-14 flex flex-col items-center justify-center text-center text-[#9A978F] p-4">
+              <div className="py-10 flex flex-col items-center justify-center text-center text-[#9A978F] p-4">
                 <Search className="w-8 h-8 opacity-30 mb-2" />
                 <p className="text-sm font-medium text-[#F4F1EA]">Find music for the room</p>
-                <p className="text-xs text-[#9A978F] mt-1">
+                <p className="text-xs text-[#9A978F] mt-1 mb-4">
                   Type any video title or artist to search
                 </p>
+                {onOpenLocalMediaModal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenChange(false);
+                      onOpenLocalMediaModal();
+                    }}
+                    className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#1C1C24] hover:bg-[#252530] border border-white/10 text-xs font-semibold text-[#F4F1EA] transition-all cursor-pointer min-h-[44px]"
+                  >
+                    <Film className="w-4 h-4 text-[#2EC4B6]" />
+                    <span>Or share your own video file</span>
+                  </button>
+                )}
               </div>
             )}
 

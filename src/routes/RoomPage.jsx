@@ -7,6 +7,8 @@ import { RoomTopBar } from '../features/room/RoomTopBar';
 import { RoomDock } from '../features/room/RoomDock';
 import { MemberList } from '../features/room/MemberList';
 import { YouTubePlayer } from '../features/player/YouTubePlayer';
+import { SharedMediaPlayer } from '../features/media/SharedMediaPlayer';
+import { LocalMediaModal } from '../features/media/LocalMediaModal';
 import { YouTubeSearchSheet } from '../features/search/YouTubeSearchSheet';
 import { QueueSheet } from '../features/queue/QueueSheet';
 import { LiveKitVoiceProvider } from '../features/voice/LiveKitVoiceProvider';
@@ -25,6 +27,8 @@ export default function RoomPage() {
   const members = useAppStore((s) => s.members);
   const queue = useAppStore((s) => s.queue);
   const nowPlaying = useAppStore((s) => s.nowPlaying);
+  const mediaState = useAppStore((s) => s.mediaState);
+  const setMediaState = useAppStore((s) => s.setMediaState);
   const clearSession = useAppStore((s) => s.clearSession);
 
   const totalQueueCount = queue.length + (nowPlaying ? 1 : 0);
@@ -34,6 +38,8 @@ export default function RoomPage() {
   const [isMembersOpen, setIsMembersOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const [isLocalMediaModalOpen, setIsLocalMediaModalOpen] = useState(false);
+  const [localMediaFile, setLocalMediaFile] = useState(null);
 
   // Validate session on mount
   useEffect(() => {
@@ -98,10 +104,20 @@ export default function RoomPage() {
       toast.error(message || 'Queue error');
     };
 
+    const handleMediaState = (updatedMediaState) => {
+      if (updatedMediaState) {
+        setMediaState(updatedMediaState);
+        if (updatedMediaState.type !== 'local') {
+          setLocalMediaFile(null);
+        }
+      }
+    };
+
     socket.on('room:members', handleMembers);
     socket.on('voice:state', handleVoiceState);
     socket.on('queue:update', handleQueueUpdate);
     socket.on('queue:error', handleQueueError);
+    socket.on('media:state', handleMediaState);
 
     if (!socket.connected && !socket.connecting) {
       socket.connect();
@@ -112,8 +128,9 @@ export default function RoomPage() {
       socket.off('voice:state', handleVoiceState);
       socket.off('queue:update', handleQueueUpdate);
       socket.off('queue:error', handleQueueError);
+      socket.off('media:state', handleMediaState);
     };
-  }, [socket]);
+  }, [socket, setMediaState]);
 
   const handleLeave = () => {
     disconnectSocket();
@@ -130,25 +147,43 @@ export default function RoomPage() {
           roomId={roomId || urlRoomId || ''}
           membersCount={Array.isArray(members) ? members.length : 1}
           onLeave={handleLeave}
+          onOpenLocalMedia={() => setIsLocalMediaModalOpen(true)}
         />
 
         {/* Main Content Area */}
         <main className="flex-1 w-full max-w-6xl mx-auto p-4 flex flex-col lg:flex-row gap-6 items-start justify-center overflow-y-auto">
           {/* Left: Video Player */}
           <section
-            aria-label="Synchronized YouTube Player"
+            aria-label="Synchronized Media Player"
             className="w-full lg:flex-1 max-w-3xl mx-auto flex flex-col gap-4"
           >
-            <YouTubePlayer
-              socket={socket}
-              onOpenSearch={() => setIsSearchOpen(true)}
-              onLocalReaction={(data) => {
-                localReactionRef.current?.({
-                  ...data,
-                  senderName: useAppStore.getState().displayName || 'You',
-                });
-              }}
-            />
+            {mediaState?.type === 'local' ? (
+              <SharedMediaPlayer
+                socket={socket}
+                localMediaFile={localMediaFile}
+                onStopSharing={() => {
+                  setLocalMediaFile(null);
+                }}
+                onLocalReaction={(data) => {
+                  localReactionRef.current?.({
+                    ...data,
+                    senderName: useAppStore.getState().displayName || 'You',
+                  });
+                }}
+              />
+            ) : (
+              <YouTubePlayer
+                socket={socket}
+                onOpenSearch={() => setIsSearchOpen(true)}
+                onOpenLocalMediaModal={() => setIsLocalMediaModalOpen(true)}
+                onLocalReaction={(data) => {
+                  localReactionRef.current?.({
+                    ...data,
+                    senderName: useAppStore.getState().displayName || 'You',
+                  });
+                }}
+              />
+            )}
           </section>
 
           {/* Right column on Desktop: Members */}
@@ -187,6 +222,16 @@ export default function RoomPage() {
           open={isSearchOpen}
           onOpenChange={setIsSearchOpen}
           socket={socket}
+          onOpenLocalMediaModal={() => setIsLocalMediaModalOpen(true)}
+        />
+
+        {/* Local Media Sharing Modal */}
+        <LocalMediaModal
+          open={isLocalMediaModalOpen}
+          onOpenChange={setIsLocalMediaModalOpen}
+          onStartShare={(file) => {
+            setLocalMediaFile(file);
+          }}
         />
 
         {/* Playback Queue Drawer */}

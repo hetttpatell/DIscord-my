@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import YouTube from 'react-youtube';
-import { Play, Music, Maximize2, Minimize2, Users, Smile } from 'lucide-react';
+import { Play, Music, Maximize2, Minimize2, Users, Smile, Film } from 'lucide-react';
 import { PlayerControls } from './PlayerControls';
 import { FullscreenSlideWindow } from './FullscreenSlideWindow';
 import { useYouTubeSync } from './useYouTubeSync';
 import { useAppStore } from '../../stores/useAppStore';
 
-export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
+export function YouTubePlayer({ socket, onOpenSearch, onOpenLocalMediaModal, onLocalReaction }) {
   const { playerState, members, memberId, nowPlaying } = useAppStore();
   const playerRef = useRef(null);
   const containerRef = useRef(null);
@@ -391,16 +391,29 @@ export function YouTubePlayer({ socket, onOpenSearch, onLocalReaction }) {
                 Search YouTube to pick a track for everyone in the room
               </p>
             </div>
-            {onOpenSearch && (
-              <button
-                type="button"
-                onClick={onOpenSearch}
-                className="mt-2 px-4 py-2 text-xs font-semibold rounded-xl bg-[#FF9F1C] text-[#0B0B10] hover:bg-[#ffb042] transition-colors cursor-pointer min-h-[44px]"
-                aria-label="Search YouTube to play"
-              >
-                Search YouTube
-              </button>
-            )}
+            <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+              {onOpenSearch && (
+                <button
+                  type="button"
+                  onClick={onOpenSearch}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-[#FF9F1C] text-[#0B0B10] hover:bg-[#ffb042] transition-colors cursor-pointer min-h-[44px]"
+                  aria-label="Search YouTube to play"
+                >
+                  Search YouTube
+                </button>
+              )}
+              {onOpenLocalMediaModal && (
+                <button
+                  type="button"
+                  onClick={onOpenLocalMediaModal}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-[#1C1C24] text-[#F4F1EA] hover:bg-[#252530] border border-white/10 transition-colors cursor-pointer min-h-[44px] flex items-center gap-2"
+                  aria-label="Share video file"
+                >
+                  <Film className="w-3.5 h-3.5 text-[#2EC4B6]" />
+                  <span>Share Video File</span>
+                </button>
+              )}
+            </div>
           </div>
         )}
 

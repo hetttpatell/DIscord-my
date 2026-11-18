@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Copy, Check, LogOut, Radio, Users } from 'lucide-react';
+import { Copy, Check, LogOut, Radio, Users, Film } from 'lucide-react';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
 
-export function RoomTopBar({ roomId, membersCount = 1, onLeave }) {
+export function RoomTopBar({ roomId, membersCount = 1, onLeave, onOpenLocalMedia }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -51,6 +51,20 @@ export function RoomTopBar({ roomId, membersCount = 1, onLeave }) {
 
       {/* Member count & Leave Button */}
       <div className="flex items-center gap-2 sm:gap-3">
+        {onOpenLocalMedia && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onOpenLocalMedia}
+            className="h-8 px-2.5 text-xs gap-1.5 bg-[#1C1C24] hover:bg-[#252530] border border-white/10 text-[#F4F1EA]"
+            aria-label="Share local video file"
+            title="Share Video File"
+          >
+            <Film className="w-3.5 h-3.5 text-[#2EC4B6]" />
+            <span className="hidden md:inline">Share Video</span>
+          </Button>
+        )}
+
         <Badge variant="default" className="gap-1.5">
           <Users className="w-3 h-3 text-[#2EC4B6]" />
           <span className="tabular-nums">{membersCount}</span>

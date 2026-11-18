@@ -17,8 +17,7 @@ import {
   CheckCircle2,
   Flame,
   MessageSquare,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAppStore } from '../../stores/useAppStore';
@@ -49,7 +48,6 @@ export function ScribbleArena({ open, onClose, socket }) {
   const displayName = useAppStore((s) => s.displayName);
 
   const canvasRef = useRef(null);
-  const chatBottomRef = useRef(null);
   const isPointerDownRef = useRef(false);
   const lastPointRef = useRef({ x: 0, y: 0 });
 
@@ -80,7 +78,7 @@ export function ScribbleArena({ open, onClose, socket }) {
   const [guessInput, setGuessInput] = useState('');
   const [chatLog, setChatLog] = useState([]);
 
-  // Floating live guess HUD with 3-second auto-slide
+  // Floating live guess HUD with 3.2-second auto-slide
   const [isFloatingFeedOpen, setIsFloatingFeedOpen] = useState(true);
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(false);
   const [isFullChatOpen, setIsFullChatOpen] = useState(false);
@@ -92,7 +90,7 @@ export function ScribbleArena({ open, onClose, socket }) {
     Array.isArray(gameState.guessedMemberIds) &&
     gameState.guessedMemberIds.includes(memberId);
 
-  // Reset 3-second auto-slide timer
+  // Reset 3.2-second auto-slide timer
   const resetAutoHideTimer = useCallback(() => {
     setIsFloatingFeedOpen(true);
     if (autoHideTimeoutRef.current) {
@@ -311,11 +309,6 @@ export function ScribbleArena({ open, onClose, socket }) {
     };
   }, [socket, drawSegment, redrawCanvas, resetAutoHideTimer]);
 
-  // Scroll chat to bottom
-  useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatLog]);
-
   // Pointer event handlers for drawing
   const handlePointerDown = (e) => {
     if (!isDrawer || !isRoundActive) return;
@@ -410,73 +403,37 @@ export function ScribbleArena({ open, onClose, socket }) {
       aria-label="Scribble & Guess Arena"
       className="fixed inset-0 z-50 flex flex-col bg-[#0B0B10]/95 backdrop-blur-2xl text-[#F4F1EA] select-none animate-in fade-in duration-200"
     >
-      {/* Top Header Bar */}
-      <header className="h-14 sm:h-16 px-3 sm:px-6 flex items-center justify-between border-b border-white/10 bg-[#141419]/95 shrink-0 z-20">
-        {/* Left: Branding & Round Info */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-[#FF5A5F] to-[#FF9F1C] text-white shadow-lg shadow-[#FF5A5F]/20 shrink-0">
-            <Gamepad2 className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
+      {/* ============================================================== */}
+      {/* 1. TIER 1: TOP STATUS & CONTROLS BAR (CLEAN & SPACIOUS) */}
+      {/* ============================================================== */}
+      <header className="h-12 px-3 sm:px-6 flex items-center justify-between border-b border-white/10 bg-[#121217]/95 shrink-0 z-20">
+        {/* Left: Game Title, Round & Category */}
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-tr from-[#FF5A5F] to-[#FF9F1C] text-white shadow-md shadow-[#FF5A5F]/20 shrink-0">
+            <Gamepad2 className="w-4 h-4 stroke-[2.2]" />
           </div>
-          <div className="flex flex-col">
-            <div className="flex items-center gap-1.5 sm:gap-2">
-              <span className="font-extrabold text-xs sm:text-base tracking-tight text-white whitespace-nowrap">
-                Scribble Arena
-              </span>
-              <span className="px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold font-mono bg-[#FF9F1C]/20 text-[#FF9F1C] border border-[#FF9F1C]/30 whitespace-nowrap">
-                R{gameState.round || 1}/{gameState.maxRounds || 5}
-              </span>
-            </div>
-            <span className="text-[10px] sm:text-[11px] text-[#9A978F] line-clamp-1">
-              Cat: <strong className="text-[#2EC4B6]">{gameState.category || 'Surprise'}</strong>
-            </span>
-          </div>
+          <span className="font-extrabold text-xs sm:text-sm tracking-tight text-white whitespace-nowrap">
+            Scribble
+          </span>
+          <span className="px-1.5 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold font-mono bg-[#FF9F1C]/20 text-[#FF9F1C] border border-[#FF9F1C]/30 shrink-0">
+            R{gameState.round || 1}/{gameState.maxRounds || 5}
+          </span>
+          <span className="text-[10px] text-[#2EC4B6] font-semibold truncate hidden xs:inline max-w-[110px] sm:max-w-none">
+            {gameState.category || 'Surprise'}
+          </span>
         </div>
 
-        {/* Center: Secret Word Clue Banner */}
-        <div className="flex flex-col items-center max-w-[42%] sm:max-w-none text-center">
-          {isDrawer ? (
-            <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1 sm:py-1.5 rounded-xl bg-[#FF9F1C]/15 border border-[#FF9F1C]/40 shadow-inner">
-              <span className="text-[10px] sm:text-xs text-[#FF9F1C] font-semibold uppercase tracking-wider hidden sm:inline">
-                🎨 DRAW:
-              </span>
-              <span className="text-xs sm:text-base font-black text-white tracking-widest font-mono truncate">
-                {gameState.word || 'Loading...'}
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 sm:gap-3 px-2.5 sm:px-5 py-1 sm:py-1.5 rounded-xl bg-[#1C1C24] border border-white/10">
-              <span className="text-[10px] sm:text-xs text-[#9A978F] hidden md:inline">
-                {gameState.currentDrawerName ? `${gameState.currentDrawerName} is drawing:` : 'Clue:'}
-              </span>
-              <span className="text-xs sm:text-lg font-black tracking-widest font-mono text-[#F4F1EA]">
-                {hasGuessed ? (
-                  <span className="text-[#2EC4B6] flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5 inline text-[#2EC4B6]" /> {gameState.word}
-                  </span>
-                ) : (
-                  gameState.maskedWord || '_ _ _ _ _'
-                )}
-              </span>
-              {!hasGuessed && gameState.wordLength > 0 && (
-                <span className="text-[9px] sm:text-[11px] font-mono text-[#9A978F] hidden sm:inline">
-                  ({gameState.wordLength} letters)
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Right: Timer, Leaderboard Toggle & Close */}
-        <div className="flex items-center gap-1.5 sm:gap-3">
-          {/* Round Timer */}
+        {/* Right: Timer, Trophy Leaderboard Button, Minimize & Close */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          {/* Round Timer Badge */}
           <div
-            className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl border font-mono font-extrabold text-xs sm:text-sm transition-all ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg border font-mono font-extrabold text-[11px] sm:text-xs transition-all ${
               gameState.timeRemaining <= 10
-                ? 'bg-[#FF5A5F]/20 text-[#FF5A5F] border-[#FF5A5F]/40 shadow-lg shadow-[#FF5A5F]/20 animate-pulse'
+                ? 'bg-[#FF5A5F]/20 text-[#FF5A5F] border-[#FF5A5F]/40 shadow-md shadow-[#FF5A5F]/20 animate-pulse'
                 : 'bg-[#1C1C24] text-[#F4F1EA] border-white/10'
             }`}
           >
-            <Clock className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+            <Clock className="w-3 h-3" />
             <span>{gameState.timeRemaining}s</span>
           </div>
 
@@ -485,8 +442,8 @@ export function ScribbleArena({ open, onClose, socket }) {
             variant="ghost"
             size="sm"
             onClick={() => setIsLeaderboardOpen((prev) => !prev)}
-            aria-label="Open leaderboard"
-            className={`h-8 sm:h-9 px-2 sm:px-3 rounded-xl text-xs font-semibold flex items-center gap-1 transition-all ${
+            aria-label="Toggle leaderboard"
+            className={`h-7 sm:h-8 px-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all ${
               isLeaderboardOpen
                 ? 'bg-[#FFE66D]/20 text-[#FFE66D] border border-[#FFE66D]/40'
                 : 'text-[#9A978F] hover:text-white hover:bg-white/10'
@@ -504,10 +461,10 @@ export function ScribbleArena({ open, onClose, socket }) {
             size="sm"
             onClick={onClose}
             aria-label="Minimize arena"
-            className="w-8 h-8 sm:w-9 sm:h-9 p-0 rounded-xl text-[#9A978F] hover:text-white hover:bg-white/10"
+            className="w-7 h-7 sm:w-8 sm:h-8 p-0 rounded-lg text-[#9A978F] hover:text-white hover:bg-white/10"
             title="Minimize Arena"
           >
-            <Minimize2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <Minimize2 className="w-3.5 h-3.5" />
           </Button>
 
           <Button
@@ -515,23 +472,67 @@ export function ScribbleArena({ open, onClose, socket }) {
             size="sm"
             onClick={onClose}
             aria-label="Close arena"
-            className="w-8 h-8 sm:w-9 sm:h-9 p-0 rounded-xl text-[#9A978F] hover:text-[#FF5A5F] hover:bg-white/10"
+            className="w-7 h-7 sm:w-8 sm:h-8 p-0 rounded-lg text-[#9A978F] hover:text-[#FF5A5F] hover:bg-white/10"
             title="Close Arena"
           >
-            <X className="w-4 h-4 sm:w-5 sm:h-5" />
+            <X className="w-4 h-4" />
           </Button>
         </div>
       </header>
 
-      {/* Main Unified Screen: Primary Drawing Pad + Floating Guess Stream */}
+      {/* ============================================================== */}
+      {/* 2. TIER 2: DEDICATED CLUE & WORD BANNER (FULL WIDTH, NO SQUISHING) */}
+      {/* ============================================================== */}
+      <div className="h-11 px-3 sm:px-6 flex items-center justify-center border-b border-white/5 bg-[#141419]/90 shrink-0 z-10 shadow-inner">
+        {isDrawer ? (
+          /* Drawer View: Big Bold Word */
+          <div className="flex items-center gap-2 text-center animate-in fade-in duration-200">
+            <span className="text-[10px] sm:text-xs text-[#FF9F1C] font-extrabold uppercase tracking-widest flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-[#FF9F1C]" />
+              DRAW THIS:
+            </span>
+            <span className="text-sm sm:text-base font-black text-white tracking-[0.25em] font-mono uppercase bg-[#FF9F1C]/15 border border-[#FF9F1C]/30 px-3 py-0.5 rounded-lg">
+              {gameState.word || 'Loading...'}
+            </span>
+          </div>
+        ) : (
+          /* Guesser View: Spaced Mystery Letters */
+          <div className="flex items-center gap-2 sm:gap-3 text-center animate-in fade-in duration-200">
+            {hasGuessed ? (
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-extrabold text-[#2EC4B6] bg-[#2EC4B6]/15 border border-[#2EC4B6]/30 px-3 py-0.5 rounded-lg">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>YOU GUESSED IT: {gameState.word}</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-[#9A978F] hidden sm:inline">
+                  {gameState.currentDrawerName ? `${gameState.currentDrawerName} is drawing:` : 'Clue:'}
+                </span>
+                <span className="text-base sm:text-lg font-black tracking-[0.35em] font-mono text-white select-all">
+                  {gameState.maskedWord || '_ _ _ _ _'}
+                </span>
+                {gameState.wordLength > 0 && (
+                  <span className="text-[10px] font-mono font-semibold text-[#9A978F] bg-white/5 px-2 py-0.5 rounded-md border border-white/10">
+                    {gameState.wordLength} letters
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ============================================================== */}
+      {/* 3. MAIN UNIFIED SCREEN: HERO CANVAS + NON-BLOCKING LIVE HUD */}
+      {/* ============================================================== */}
       <div className="relative flex-1 min-h-0 flex flex-col lg:flex-row p-2 sm:p-4 gap-3 overflow-hidden">
-        {/* Hero Drawing Pad Stage (Always Primary) */}
+        {/* Drawing Pad Stage */}
         <section
           aria-label="Primary Drawing Pad"
           className="relative flex-1 min-h-0 flex flex-col gap-2 rounded-2xl overflow-hidden"
         >
           {/* Canvas Wrapper */}
-          <div className="relative flex-1 min-h-0 w-full rounded-2xl overflow-hidden border border-white/15 bg-[#141419] shadow-2xl flex items-center justify-center">
+          <div className="relative flex-1 min-h-0 w-full rounded-2xl overflow-hidden border border-white/10 bg-[#141419] shadow-2xl flex items-center justify-center">
             <canvas
               ref={canvasRef}
               onPointerDown={handlePointerDown}
@@ -544,75 +545,58 @@ export function ScribbleArena({ open, onClose, socket }) {
               style={{ touchAction: 'none' }}
             />
 
-            {/* FLOATING LIVE GUESS HUD (Touches pass through to canvas seamlessly) */}
-            <div
-              className={`absolute top-3 left-3 z-30 transition-all duration-300 ease-out flex flex-col items-start pointer-events-none ${
-                isFloatingFeedOpen
-                  ? 'translate-x-0 opacity-100'
-                  : '-translate-x-[calc(100%-2.25rem)] opacity-85'
-              }`}
-            >
+            {/* FLOATING LIVE GUESS HUD (BOTTOM-LEFT, NON-BLOCKING, ZERO CUT-OFF) */}
+            <div className="absolute bottom-3 left-3 z-30 pointer-events-none flex flex-col items-start gap-1.5 max-w-[85%] sm:max-w-xs">
               {isFloatingFeedOpen ? (
-                /* Expanded Floating Live Guesses Window */
-                <div className="pointer-events-auto w-56 sm:w-64 max-h-44 sm:max-h-56 rounded-2xl bg-[#141419]/90 border border-white/15 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden text-xs">
-                  {/* Floating Header */}
-                  <div className="px-2.5 py-1.5 flex items-center justify-between border-b border-white/10 bg-white/5">
-                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-white">
-                      <Flame className="w-3.5 h-3.5 text-[#FF5A5F]" />
-                      <span>Live Guesses</span>
-                    </div>
+                /* Expanded Floating Badges */
+                <div className="pointer-events-auto flex flex-col gap-1 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-xl bg-[#141419]/90 border border-white/10 backdrop-blur-md shadow-lg">
+                    <span className="text-[10px] font-bold text-[#FF9F1C] flex items-center gap-1">
+                      <Flame className="w-3 h-3 text-[#FF5A5F]" /> Live Guesses
+                    </span>
                     <button
                       type="button"
                       onClick={() => setIsFloatingFeedOpen(false)}
-                      className="p-1 rounded-md text-[#9A978F] hover:text-white cursor-pointer"
-                      title="Collapse stream"
+                      className="text-[#9A978F] hover:text-white p-0.5 cursor-pointer"
+                      title="Hide Live Guesses"
                     >
-                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <ChevronDown className="w-3 h-3" />
                     </button>
                   </div>
 
-                  {/* Messages Feed */}
-                  <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1.5 text-[11px]">
-                    {chatLog.length === 0 ? (
-                      <span className="text-[10px] text-[#9A978F] m-auto italic py-4">
-                        Guesses will stream here live...
-                      </span>
-                    ) : (
-                      chatLog.slice(-12).map((msg) => (
-                        <div
-                          key={msg.id}
-                          className={`leading-tight p-1.5 rounded-lg text-[11px] ${
-                            msg.isCorrect
-                              ? 'bg-[#2EC4B6]/20 border border-[#2EC4B6]/40 text-[#2EC4B6] font-extrabold shadow-sm'
-                              : msg.isSystem
-                              ? 'bg-white/5 text-[#FF9F1C] italic'
-                              : 'bg-white/5 text-[#F4F1EA]'
-                          }`}
-                        >
-                          {!msg.isSystem && !msg.isCorrect && (
-                            <span className="font-bold text-[#9A978F] mr-1">
-                              {msg.displayName}:
-                            </span>
-                          )}
-                          <span>{msg.text}</span>
-                        </div>
-                      ))
-                    )}
-                    <div ref={chatBottomRef} />
+                  <div className="flex flex-col gap-1 max-h-32 overflow-y-auto">
+                    {chatLog.slice(-4).map((msg) => (
+                      <div
+                        key={msg.id}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] leading-tight backdrop-blur-md shadow-md ${
+                          msg.isCorrect
+                            ? 'bg-[#2EC4B6]/25 border border-[#2EC4B6]/40 text-[#2EC4B6] font-black'
+                            : msg.isSystem
+                            ? 'bg-[#1C1C24]/85 text-[#FF9F1C] border border-white/10 italic font-semibold'
+                            : 'bg-[#1C1C24]/85 text-[#F4F1EA] border border-white/10'
+                        }`}
+                      >
+                        {!msg.isSystem && !msg.isCorrect && (
+                          <span className="font-bold text-[#9A978F] mr-1">
+                            {msg.displayName}:
+                          </span>
+                        )}
+                        <span>{msg.text}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ) : (
-                /* Collapsed Floating Pill Tab (Slides to edge after 3s) */
+                /* Collapsed Discrete Floating Pill (Never cut off, 100% inside canvas!) */
                 <button
                   type="button"
                   onClick={() => resetAutoHideTimer()}
-                  className="pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-[#1C1C24]/90 border border-[#FF9F1C]/40 text-white backdrop-blur-md shadow-xl hover:bg-[#252530] cursor-pointer transition-all animate-in slide-in-from-left duration-200"
+                  className="pointer-events-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1C1C24]/90 border border-white/15 text-white backdrop-blur-md shadow-xl hover:bg-[#252530] cursor-pointer transition-transform hover:scale-105 active:scale-95"
                 >
-                  <MessageSquare className="w-3.5 h-3.5 text-[#FF9F1C]" />
-                  <span className="text-[10px] font-bold tracking-tight">
+                  <MessageSquare className="w-3 h-3 text-[#FF9F1C]" />
+                  <span className="text-[10px] font-bold">
                     {chatLog.length > 0 ? `${chatLog.length} Guesses` : 'Guesses'}
                   </span>
-                  <ChevronRight className="w-3 h-3 text-[#9A978F]" />
                 </button>
               )}
             </div>
@@ -628,7 +612,7 @@ export function ScribbleArena({ open, onClose, socket }) {
                     Scribble Arena
                   </h2>
                   <p className="text-xs text-[#9A978F] leading-relaxed">
-                    One member draws, everyone guesses on the same screen! 100+ words across food, animals, heroes, and places.
+                    105+ words with zero repetition! One draws, everyone guesses in real time.
                   </p>
                 </div>
                 <Button
@@ -661,12 +645,14 @@ export function ScribbleArena({ open, onClose, socket }) {
             )}
           </div>
 
-          {/* BOTTOM CONTROLS (ON SAME PAGE FOR ALL DEVICES) */}
+          {/* ============================================================== */}
+          {/* 4. BOTTOM CONTROLS (STUDIO TOOLBAR FOR DRAWER / GUESS BAR FOR GUESSER) */}
+          {/* ============================================================== */}
           {isDrawer && isRoundActive ? (
-            /* Drawer Professional Studio Toolbar */
-            <div className="flex flex-wrap items-center justify-between gap-2 p-2 sm:p-3 bg-[#1C1C24] rounded-2xl border border-white/10 shadow-xl shrink-0">
-              {/* Color Palette (12 Designer Swatches) */}
-              <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto py-1 max-w-full">
+            /* Drawer Studio Palette & Tools */
+            <div className="flex flex-wrap items-center justify-between gap-2 p-2 sm:p-2.5 bg-[#1C1C24] rounded-2xl border border-white/10 shadow-xl shrink-0">
+              {/* 12 Designer Colors Palette */}
+              <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto py-0.5 max-w-full">
                 {COLOR_PALETTE.map((color) => (
                   <button
                     key={color}
@@ -686,7 +672,7 @@ export function ScribbleArena({ open, onClose, socket }) {
                 ))}
               </div>
 
-              {/* Tools & Brush Sizes */}
+              {/* Tools & Stroke Widths */}
               <div className="flex items-center gap-1.5 sm:gap-2">
                 {BRUSH_SIZES.map((b) => (
                   <button
@@ -743,18 +729,18 @@ export function ScribbleArena({ open, onClose, socket }) {
               </div>
             </div>
           ) : (
-            /* Guesser Bottom Input Bar (Always Accessible on the Same Screen!) */
+            /* Guesser Bottom Input Bar */
             <form
               onSubmit={handleSendGuess}
-              className="flex gap-2 p-2 bg-[#1C1C24] rounded-2xl border border-white/10 shadow-xl shrink-0"
+              className="flex gap-2 p-1.5 sm:p-2 bg-[#1C1C24] rounded-2xl border border-white/10 shadow-xl shrink-0"
             >
               <Input
                 type="text"
                 placeholder={
                   hasGuessed
-                    ? '🎉 You already guessed the word! Waiting for others...'
+                    ? '🎉 You guessed it! Waiting for others...'
                     : !isRoundActive
-                    ? 'Match starting shortly...'
+                    ? 'Round starting shortly...'
                     : 'Type your guess here (e.g. Pizza)...'
                 }
                 value={guessInput}
@@ -764,14 +750,14 @@ export function ScribbleArena({ open, onClose, socket }) {
                 }}
                 onFocus={resetAutoHideTimer}
                 disabled={!isRoundActive || hasGuessed}
-                className="flex-1 h-11 text-xs sm:text-sm bg-[#141419] border-white/10 text-white placeholder:text-[#9A978F] rounded-xl"
+                className="flex-1 h-10 sm:h-11 text-xs sm:text-sm bg-[#141419] border-white/10 text-white placeholder:text-[#9A978F] rounded-xl"
               />
               <Button
                 type="submit"
                 variant="primary"
                 size="default"
                 disabled={!isRoundActive || hasGuessed || !guessInput.trim()}
-                className="h-11 px-4 sm:px-5 shrink-0 rounded-xl font-bold flex items-center gap-1.5 shadow-lg shadow-[#FF9F1C]/20"
+                className="h-10 sm:h-11 px-4 sm:px-5 shrink-0 rounded-xl font-bold flex items-center gap-1.5 shadow-lg shadow-[#FF9F1C]/20"
               >
                 <span>Guess</span>
                 <Send className="w-3.5 h-3.5" />
@@ -781,8 +767,8 @@ export function ScribbleArena({ open, onClose, socket }) {
                 variant="ghost"
                 size="default"
                 onClick={() => setIsFullChatOpen((prev) => !prev)}
-                className="h-11 px-3 shrink-0 rounded-xl text-[#9A978F] hover:text-white border border-white/10"
-                title="Toggle Full Chat Log"
+                className="h-10 sm:h-11 px-3 shrink-0 rounded-xl text-[#9A978F] hover:text-white border border-white/10"
+                title="Full Guess Log"
               >
                 <MessageSquare className="w-4 h-4" />
               </Button>
@@ -797,7 +783,7 @@ export function ScribbleArena({ open, onClose, socket }) {
             className={`${
               window.innerWidth >= 1024
                 ? 'w-72 shrink-0 flex flex-col gap-3 min-h-0'
-                : 'fixed inset-y-14 sm:inset-y-16 right-0 z-40 w-80 max-w-[85vw] bg-[#141419]/95 border-l border-white/15 backdrop-blur-2xl p-4 shadow-2xl flex flex-col gap-3 animate-in slide-in-from-right duration-200'
+                : 'fixed inset-y-12 sm:inset-y-16 right-0 z-40 w-80 max-w-[85vw] bg-[#141419]/95 border-l border-white/15 backdrop-blur-2xl p-4 shadow-2xl flex flex-col gap-3 animate-in slide-in-from-right duration-200'
             }`}
           >
             <div className="flex items-center justify-between pb-2 border-b border-white/10">

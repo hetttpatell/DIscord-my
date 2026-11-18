@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useRoomContext, useTracks, VideoTrack } from '@livekit/components-react';
+import { useRoomContext, useTracks } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import { Film, Radio, StopCircle, Maximize2, Minimize2, Users, Smile, Play } from 'lucide-react';
 import { PlayerControls } from '../player/PlayerControls';
@@ -18,7 +18,10 @@ export function SharedMediaPlayer({
   const isSharer = Boolean(localMediaFile) || memberId === mediaState?.sharerId;
 
   const videoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
   const containerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const animFrameRef = useRef(null);
   const publishedVideoTrackRef = useRef(null);
   const publishedAudioTrackRef = useRef(null);
 
@@ -85,16 +88,46 @@ export function SharedMediaPlayer({
     return anyVideo || null;
   }, [isSharer, tracks, mediaState?.sharerId, mediaState?.sharerName]);
 
-  // Ensure subscription is active as soon as remote track publication is detected
+  // Subscribe and attach remote video track directly to video element
   useEffect(() => {
-    if (isSharer || !remoteTrackRef?.publication) return;
+    if (isSharer) return;
 
-    if (!remoteTrackRef.publication.isSubscribed) {
-      remoteTrackRef.publication.setSubscribed(true);
+    const el = remoteVideoRef.current;
+    const pub = remoteTrackRef?.publication;
+    if (pub && !pub.isSubscribed) {
+      pub.setSubscribed(true);
     }
-  }, [isSharer, remoteTrackRef]);
 
-  // 2. Sharer: Publish video & audio tracks to LiveKit room
+    const attachTrack = (track) => {
+      if (track && el) {
+        track.attach(el);
+        el.play().catch(() => {});
+      }
+    };
+
+    if (pub?.track) {
+      attachTrack(pub.track);
+    }
+
+    const handleTrackSubscribed = (track, subscribedPub) => {
+      if (track.kind === 'video' || subscribedPub?.kind === 'video') {
+        attachTrack(track);
+      }
+    };
+
+    room?.on('trackSubscribed', handleTrackSubscribed);
+
+    return () => {
+      room?.off('trackSubscribed', handleTrackSubscribed);
+      if (pub?.track && el) {
+        try {
+          pub.track.detach(el);
+        } catch {}
+      }
+    };
+  }, [isSharer, remoteTrackRef, remoteTrackRef?.publication?.track, room]);
+
+  // 2. Sharer: Publish video & audio tracks to LiveKit room via 2D Canvas pipeline
   useEffect(() => {
     if (!isSharer) return;
 
@@ -124,21 +157,76 @@ export function SharedMediaPlayer({
       if (publishedVideoTrackRef.current) return;
 
       try {
-        const stream = video.captureStream
-          ? video.captureStream(30)
-          : video.mozCaptureStream
-          ? video.mozCaptureStream(30)
-          : null;
-
-        if (!stream) {
-          console.warn('[SharedMedia] captureStream not supported in this browser.');
-          return;
+        // Offscreen canvas pipeline:
+        // Solves the known Chromium GPU zero-copy texture-backed frame bug where
+        // video.captureStream() causes a completely black screen in WebRTC for remote peers.
+        let canvas = canvasRef.current;
+        if (!canvas) {
+          canvas = document.createElement('canvas');
+          canvasRef.current = canvas;
         }
 
-        const videoMediaTrack = stream.getVideoTracks()[0];
-        const audioMediaTrack = stream.getAudioTracks()[0];
+        const width = video.videoWidth || 1280;
+        const height = video.videoHeight || 720;
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d', { alpha: false });
+
+        const drawFrame = () => {
+          if (!video || !canvas || !ctx) return;
+          if (video.videoWidth > 0 && video.videoHeight > 0) {
+            if (canvas.width !== video.videoWidth) {
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+            }
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          }
+        };
+
+        // Draw initial frame immediately
+        drawFrame();
+
+        // Render loop for playing video
+        const loop = () => {
+          if (!isCancelled) {
+            if (video && !video.paused && !video.ended) {
+              drawFrame();
+            }
+            animFrameRef.current = requestAnimationFrame(loop);
+          }
+        };
+        animFrameRef.current = requestAnimationFrame(loop);
+
+        // Also draw immediately on seek, pause, and time update
+        video.addEventListener('seeked', drawFrame);
+        video.addEventListener('pause', drawFrame);
+        video.addEventListener('timeupdate', drawFrame);
+
+        // Get reliable video stream from canvas
+        const canvasStream = canvas.captureStream ? canvas.captureStream(30) : null;
+        let videoMediaTrack = canvasStream?.getVideoTracks()?.[0];
+
+        // Fallback to direct video.captureStream if canvas.captureStream is unavailable
+        if (!videoMediaTrack) {
+          const directStream = video.captureStream
+            ? video.captureStream(30)
+            : video.mozCaptureStream
+            ? video.mozCaptureStream(30)
+            : null;
+          videoMediaTrack = directStream?.getVideoTracks()?.[0];
+        }
+
+        // Audio track MUST come from the video element
+        const audioStream = video.captureStream
+          ? video.captureStream()
+          : video.mozCaptureStream
+          ? video.mozCaptureStream()
+          : null;
+        const audioMediaTrack = audioStream?.getAudioTracks()?.[0];
 
         if (videoMediaTrack && !isCancelled && !publishedVideoTrackRef.current) {
+          videoMediaTrack.enabled = true;
           const pub = await room.localParticipant.publishTrack(videoMediaTrack, {
             name: 'shared-video',
             source: Track.Source.ScreenShare,
@@ -148,6 +236,7 @@ export function SharedMediaPlayer({
         }
 
         if (audioMediaTrack && !isCancelled && !publishedAudioTrackRef.current) {
+          audioMediaTrack.enabled = true;
           const pubAudio = await room.localParticipant.publishTrack(audioMediaTrack, {
             name: 'shared-audio',
             source: Track.Source.ScreenShareAudio,
@@ -201,6 +290,10 @@ export function SharedMediaPlayer({
 
     return () => {
       isCancelled = true;
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
       if (videoEl) {
         videoEl.removeEventListener('loadedmetadata', handleLoadedMetadata);
       }
@@ -547,9 +640,11 @@ export function SharedMediaPlayer({
                 : 'w-full h-full flex items-center justify-center'
             }
           >
-            <VideoTrack
-              trackRef={remoteTrackRef}
-              manageSubscription={true}
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              muted
               className="w-full h-full object-contain pointer-events-none"
             />
           </div>

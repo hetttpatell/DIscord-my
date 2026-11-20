@@ -1,26 +1,39 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Eye, EyeOff, Radio, Plus, LogIn, ArrowRight, PartyPopper } from 'lucide-react';
+import { Eye, EyeOff, Radio, Plus, LogIn, ArrowRight, PartyPopper, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { useAppStore } from '../stores/useAppStore';
 import { apiRequest } from '../lib/api';
+import { saveRoomCredentials, getLastActiveRoom } from '../lib/roomStorage';
 
 const ROOM_ID_REGEX = /^[a-zA-Z0-9_-]{3,32}$/;
 
 export default function LobbyPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const setSession = useAppStore((s) => s.setSession);
 
-  const [tab, setTab] = useState('create'); // 'create' | 'join'
-  const [roomId, setRoomId] = useState('');
-  const [password, setPassword] = useState('');
+  const queryRoomId = searchParams.get('roomId') || searchParams.get('join') || '';
+  const [recentRoom] = useState(() => getLastActiveRoom());
+  const [tab, setTab] = useState(queryRoomId ? 'join' : 'create'); // 'create' | 'join'
+  const [roomId, setRoomId] = useState(queryRoomId);
+  const [password, setPassword] = useState(() => {
+    if (queryRoomId && recentRoom?.roomId === queryRoomId && recentRoom?.password) {
+      return recentRoom.password;
+    }
+    return '';
+  });
   const [welcomeMessage, setWelcomeMessage] = useState('');
-  const [displayName, setDisplayName] = useState(
-    () => (typeof window !== 'undefined' ? localStorage.getItem('afterspot_displayName') || '' : '')
-  );
+  const [displayName, setDisplayName] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('afterspot_displayName');
+      if (stored) return stored;
+    }
+    return recentRoom?.displayName || '';
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState({});
@@ -75,6 +88,14 @@ export default function LobbyPage() {
         roomId: data.roomId,
         memberId: data.memberId,
         displayName: data.displayName,
+      });
+
+      saveRoomCredentials({
+        roomId: data.roomId,
+        token: data.token,
+        memberId: data.memberId,
+        displayName: data.displayName,
+        password,
       });
 
       if (data.welcomeMessage) {
@@ -148,6 +169,38 @@ export default function LobbyPage() {
               Join Room
             </button>
           </div>
+
+          {/* Quick-Rejoin Recent Lounge Card */}
+          {tab === 'join' && recentRoom && (
+            <div className="mb-4 p-3 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between gap-3 animate-in fade-in duration-200">
+              <div className="min-w-0 flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-[#FF9F1C]/15 border border-[#FF9F1C]/30 flex items-center justify-center shrink-0">
+                  <History className="w-4 h-4 text-[#FF9F1C]" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] text-[#9A978F] font-semibold uppercase tracking-wider">
+                    Recent Lounge
+                  </p>
+                  <p className="text-xs font-mono font-bold text-white truncate">
+                    {recentRoom.roomId}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setRoomId(recentRoom.roomId);
+                  if (recentRoom.password) setPassword(recentRoom.password);
+                  if (recentRoom.displayName) setDisplayName(recentRoom.displayName);
+                  setErrors({});
+                  toast.info(`Loaded credentials for ${recentRoom.roomId}`);
+                }}
+                className="text-xs px-2.5 py-1.5 rounded-lg bg-[#FF9F1C]/20 hover:bg-[#FF9F1C]/30 text-[#FF9F1C] border border-[#FF9F1C]/30 font-semibold cursor-pointer shrink-0 transition-colors active:scale-95"
+              >
+                Auto-fill
+              </button>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             {/* Room ID */}

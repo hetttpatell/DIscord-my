@@ -19,7 +19,11 @@ import { ReactionPicker } from '../features/reactions/ReactionPicker';
 import { CameraStrip } from '../features/video/CameraStrip';
 import { WelcomeCelebrationModal } from '../features/room/WelcomeCelebrationModal';
 import { SetWelcomeMessageModal } from '../features/room/SetWelcomeMessageModal';
-import { Gamepad2 } from 'lucide-react';
+import { ExitConfirmModal } from '../features/room/ExitConfirmModal';
+import { InRoomJoinCard } from '../features/room/InRoomJoinCard';
+import { getSavedRoom, saveRoomCredentials } from '../lib/roomStorage';
+import { apiRequest } from '../lib/api';
+import { Gamepad2, Radio } from 'lucide-react';
 import { Sheet } from '../components/Sheet';
 import { stopMicrophone } from '../lib/microphone';
 import { stopCamera } from '../lib/camera';
@@ -52,13 +56,103 @@ export default function RoomPage() {
   const [localMediaFile, setLocalMediaFile] = useState(null);
   const [celebrationMessage, setCelebrationMessage] = useState(null);
   const [isSetWelcomeOpen, setIsSetWelcomeOpen] = useState(false);
+  const [isExitConfirmOpen, setIsExitConfirmOpen] = useState(false);
+  const [isCheckingSession, setIsCheckingSession] = useState(!token || roomId !== urlRoomId);
+  const [needsAuth, setNeedsAuth] = useState(false);
 
-  // Validate session on mount
+  // Validate session on mount or auto-restore credentials from localStorage
   useEffect(() => {
-    if (!token || !roomId || roomId !== urlRoomId) {
-      navigate('/');
+    if (token && roomId === urlRoomId) {
+      return;
     }
+
+    let isMounted = true;
+    const checkAndRestore = async () => {
+      if (!urlRoomId) {
+        if (isMounted) navigate('/');
+        return;
+      }
+
+      const saved = getSavedRoom(urlRoomId);
+      if (saved?.password) {
+        try {
+          const data = await apiRequest('/api/rooms/join', {
+            method: 'POST',
+            body: {
+              roomId: urlRoomId.trim(),
+              password: saved.password,
+              displayName: saved.displayName || 'Guest',
+            },
+          });
+
+          if (!isMounted) return;
+
+          useAppStore.getState().setSession({
+            token: data.token,
+            roomId: data.roomId,
+            memberId: data.memberId,
+            displayName: data.displayName,
+          });
+
+          saveRoomCredentials({
+            roomId: data.roomId,
+            token: data.token,
+            memberId: data.memberId,
+            displayName: data.displayName,
+            password: saved.password,
+          });
+
+          if (data.welcomeMessage) {
+            useAppStore.getState().setWelcomeMessage(data.welcomeMessage, data.creatorDisplayName || 'Host');
+            const seenKey = `welcome_seen_${data.roomId}_${data.welcomeMessage}`;
+            if (typeof window !== 'undefined' && !sessionStorage.getItem(seenKey)) {
+              setCelebrationMessage({
+                message: data.welcomeMessage,
+                creatorDisplayName: data.creatorDisplayName || 'Host',
+              });
+            }
+          }
+
+          setIsCheckingSession(false);
+          setNeedsAuth(false);
+          toast.success(`Reconnected to ${urlRoomId}!`);
+          return;
+        } catch (err) {
+          console.warn('[RoomPage] Auto-rejoin failed:', err?.message);
+        }
+      }
+
+      if (isMounted) {
+        setIsCheckingSession(false);
+        setNeedsAuth(true);
+      }
+    };
+
+    checkAndRestore();
+
+    return () => {
+      isMounted = false;
+    };
   }, [token, roomId, urlRoomId, navigate]);
+
+  // Intercept browser back button & mobile swipe back gesture to prompt exit confirmation
+  useEffect(() => {
+    if (!token || !roomId || roomId !== urlRoomId) return;
+
+    // Push dummy history entry so back button doesn't immediately exit
+    window.history.pushState({ afterspotRoom: true }, '', window.location.href);
+
+    const handlePopState = () => {
+      // Re-push state so URL stays in the room while modal confirms
+      window.history.pushState({ afterspotRoom: true }, '', window.location.href);
+      setIsExitConfirmOpen(true);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [token, roomId, urlRoomId]);
 
   // Clean up on window close / page refresh
   useEffect(() => {
@@ -205,12 +299,13 @@ export default function RoomPage() {
     };
   }, [socket, setMediaState, roomId]);
 
-  const handleLeave = () => {
+  const handleConfirmLeave = () => {
+    setIsExitConfirmOpen(false);
     disconnectSocket();
     stopMicrophone();
     stopCamera();
     clearSession();
-    navigate('/');
+    navigate('/', { replace: true });
   };
 
   const handleStartShare = (file) => {
@@ -258,6 +353,30 @@ export default function RoomPage() {
     activeSock?.emit('media:stop');
   };
 
+  if (isCheckingSession) {
+    return (
+      <div className="min-h-dvh w-full flex flex-col items-center justify-center p-4 bg-[#0B0B10] text-[#F4F1EA] select-none">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#FF9F1C] to-[#FF5A5F] flex items-center justify-center shadow-lg shadow-[#FF9F1C]/25 mb-4 animate-pulse">
+          <Radio className="w-7 h-7 text-[#0B0B10]" />
+        </div>
+        <p className="text-sm font-semibold text-[#F4F1EA]">Reconnecting to Lounge...</p>
+        <p className="text-xs text-[#9A978F] mt-1.5 font-mono">Room: {urlRoomId}</p>
+      </div>
+    );
+  }
+
+  if (needsAuth) {
+    return (
+      <InRoomJoinCard
+        roomId={urlRoomId || ''}
+        onJoined={() => {
+          setNeedsAuth(false);
+          setIsCheckingSession(false);
+        }}
+      />
+    );
+  }
+
   return (
     <LiveKitVoiceProvider>
       <div className="relative min-h-dvh w-full flex flex-col bg-[#0B0B10] text-[#F4F1EA] select-none overflow-hidden pb-20">
@@ -265,7 +384,7 @@ export default function RoomPage() {
         <RoomTopBar
           roomId={roomId || urlRoomId || ''}
           membersCount={Array.isArray(members) ? members.length : 1}
-          onLeave={handleLeave}
+          onLeave={() => setIsExitConfirmOpen(true)}
           onOpenLocalMedia={() => setIsLocalMediaModalOpen(true)}
         />
 
@@ -454,6 +573,13 @@ export default function RoomPage() {
           onClose={() => setIsSetWelcomeOpen(false)}
           socket={socket}
           currentMessage={useAppStore.getState().welcomeMessage || ''}
+        />
+
+        {/* Exit Confirmation Modal */}
+        <ExitConfirmModal
+          isOpen={isExitConfirmOpen}
+          onConfirm={handleConfirmLeave}
+          onCancel={() => setIsExitConfirmOpen(false)}
         />
       </div>
     </LiveKitVoiceProvider>
